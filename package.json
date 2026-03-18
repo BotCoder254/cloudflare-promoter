@@ -16,12 +16,21 @@
   },
   "keywords": [
     "github-action",
+    "github-actions",
     "cloudflare",
+    "cloudflare-workers",
     "workers",
     "deployment",
+    "deployment-automation",
     "promotion",
+    "release-automation",
+    "release-management",
+    "progressive-delivery",
     "rollback",
-    "wrangler"
+    "smoke-tests",
+    "wrangler",
+    "devops",
+    "sre"
   ],
   "author": "",
   "license": "MIT",

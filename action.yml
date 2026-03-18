@@ -1,5 +1,5 @@
 name: 'Workers Release Promoter'
-description: 'Turn a GitHub Release into a controlled Cloudflare Workers production promotion flow with staged rollout, smoke-test gating, and automatic rollback.'
+description: 'Promote Cloudflare Workers from GitHub Releases with staged rollout, smoke tests, rollback, and release annotations.'
 author: 'TELVIN TEUM'
 
 branding:
