@@ -1,6 +1,6 @@
 # Workers Release Promoter
 
-A marketplace-quality GitHub Action that turns a **GitHub Release** into a controlled **Cloudflare Workers** production promotion flow — with staged rollout, smoke-test gating, automatic rollback, and release-page deployment annotations.
+A marketplace-quality GitHub Action that turns a **GitHub Release** into a controlled **Cloudflare Workers** production promotion flow -- with promotion strategies, two-phase smoke-test gating, automatic rollback, and release-page deployment annotations.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=fff)](#)
 [![Node.js 20](https://img.shields.io/badge/Node.js-20-339933?logo=node.js&logoColor=fff)](#)
@@ -10,14 +10,17 @@ A marketplace-quality GitHub Action that turns a **GitHub Release** into a contr
 
 ## Features
 
-- **Release-driven deployment** — triggers on `release.published` (supports `workflow_dispatch`, `push`, `merge_group`)
-- ** Gradual rollout** — split traffic with configurable percentage steps (e.g., `10,50,100`)
-- ** Smoke-test gating** — native `fetch`-based checks between rollout steps
-- ** Automatic rollback** — reverts to the previous stable version on failure
-- ** Release annotations** — appends deployment details to the GitHub Release body
-- ** Dry-run mode** — validate everything without deploying
-- ** Job summaries** — rich GitHub Actions job summary with rollout tables
-- ** Secure** — secrets masking, least-privilege tokens, no hardcoded credentials
+- **Release-driven deployment** -- triggers on `release.published` (supports `workflow_dispatch`, `push`, `merge_group`)
+- **Promotion strategies** -- three modes: `immediate`, `gradual`, and `staging-only`
+- **Gradual rollout** -- split traffic with configurable percentage steps (e.g., `10,50,100`)
+- **Two-phase smoke testing** -- candidate verification before promotion, post-promotion verification after
+- **Custom smoke commands** -- run any shell command as an additional verification gate
+- **Automatic rollback** -- reverts to the previous stable version on failure, with post-rollback health check
+- **Granular failure status** -- distinguishes `failed-no-rollback`, `failed-rollback-succeeded`, `failed-rollback-failed`, `failed-rollback-disabled`
+- **Release annotations** -- appends structured deployment metadata to the GitHub Release body
+- **Dry-run mode** -- validate everything without deploying
+- **Job summaries** -- rich GitHub Actions job summary with rollout tables, lifecycle history, and failure analysis
+- **Secure** -- secrets masking, least-privilege tokens, no hardcoded credentials
 
 ---
 
@@ -25,7 +28,7 @@ A marketplace-quality GitHub Action that turns a **GitHub Release** into a contr
 
 ### 1. Create Cloudflare Secrets
 
-In your repository's **Settings → Secrets and variables → Actions**, add:
+In your repository's **Settings > Secrets and variables > Actions**, add:
 
 | Secret | Description |
 | ------ | ----------- |
@@ -63,45 +66,232 @@ jobs:
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           worker-name: my-worker
           environment: production
+          promotion-strategy: gradual
+          gradual-steps: '10,50,100'
           smoke-test-url: https://my-worker.example.workers.dev/health
           smoke-test-expected-status: '200'
-          rollout-percentage: '10,50,100'
 ```
 
 ---
 
 ## Inputs
 
+### Cloudflare Auth
+
 | Input | Required | Default | Description |
 | ----- | -------- | ------- | ----------- |
-| `cloudflare-api-token` | Yes* | — | Cloudflare API token (or set `CLOUDFLARE_API_TOKEN` env var) |
-| `cloudflare-account-id` | Yes* | — | Cloudflare account ID (or set `CLOUDFLARE_ACCOUNT_ID` env var) |
-| `worker-name` | No | — | Worker name (resolved from wrangler config if omitted) |
-| `working-directory` | No | `.` | Path to Worker project directory |
-| `environment` | No | `production` | Wrangler environment name |
-| `smoke-test-url` | No | — | URL for post-deploy smoke test |
-| `smoke-test-expected-status` | No | `200` | Expected HTTP status from smoke test |
-| `smoke-test-expected-body-contains` | No | — | String the response body must contain |
-| `smoke-test-timeout` | No | `10000` | Smoke test request timeout (ms) |
-| `smoke-test-retries` | No | `3` | Smoke test retry attempts |
-| `rollout-percentage` | No | `100` | Comma-separated rollout steps (e.g., `10,50,100`) |
-| `dry-run` | No | `false` | Validate without deploying |
-| `github-token` | No | `${{ github.token }}` | GitHub token for release annotations |
+| `cloudflare-api-token` | Yes* | -- | Cloudflare API token (or set `CLOUDFLARE_API_TOKEN` env var) |
+| `cloudflare-account-id` | Yes* | -- | Cloudflare account ID (or set `CLOUDFLARE_ACCOUNT_ID` env var) |
 
 \* Required via input or environment variable.
+
+### Worker Configuration
+
+| Input | Required | Default | Description |
+| ----- | -------- | ------- | ----------- |
+| `worker-name` | No | -- | Worker name (resolved from wrangler config if omitted) |
+| `working-directory` | No | `.` | Path to Worker project directory |
+| `environment` | No | `production` | Wrangler environment name |
+
+### Promotion Strategy
+
+| Input | Required | Default | Description |
+| ----- | -------- | ------- | ----------- |
+| `promotion-strategy` | No | `immediate` | `immediate`, `gradual`, or `staging-only` |
+| `gradual-steps` | No | `10,50,100` | Comma-separated rollout percentages (used with `gradual`) |
+| `gradual-step-wait-seconds` | No | `5` | Seconds to wait between gradual steps before verification |
+| `post-step-smoke-tests` | No | `true` | Run smoke tests after each gradual step |
+| `rollout-percentage` | No | `100` | Deprecated alias for `gradual-steps` |
+
+### Smoke Testing
+
+| Input | Required | Default | Description |
+| ----- | -------- | ------- | ----------- |
+| `smoke-test-url` | No | -- | URL for post-deploy smoke test |
+| `smoke-test-paths` | No | -- | Additional paths to check (e.g., `/health,/api/status`) |
+| `smoke-test-expected-status` | No | `200` | Expected HTTP status code |
+| `smoke-test-expected-body-contains` | No | -- | String the response body must contain |
+| `smoke-test-timeout` | No | `10000` | Per-request timeout (ms) |
+| `smoke-test-retries` | No | `3` | Retry attempts per check |
+| `smoke-test-retry-interval` | No | `2000` | Interval between retries (ms) |
+| `smoke-test-deadline` | No | `120000` | Total deadline for all smoke tests (ms) |
+| `smoke-test-command` | No | -- | Custom shell command for additional verification |
+| `smoke-test-required` | No | `true` | If `false`, failures produce warnings but do not block |
+
+### General
+
+| Input | Required | Default | Description |
+| ----- | -------- | ------- | ----------- |
+| `auto-rollback` | No | `true` | Enable automatic rollback on failure |
+| `dry-run` | No | `false` | Validate without deploying |
+| `github-token` | No | `${{ github.token }}` | GitHub token for release annotations |
 
 ---
 
 ## Outputs
 
+### Release Context
+
+| Output | Description |
+| ------ | ----------- |
+| `release-tag` | Git tag of the release |
+| `release-id` | GitHub Release ID |
+
+### Deployment Metadata
+
 | Output | Description |
 | ------ | ----------- |
 | `deployment-id` | Cloudflare deployment ID |
-| `version-id` | Cloudflare Worker version ID |
-| `deployment-url` | Deployed Worker URL |
+| `worker-version-id` | Cloudflare Worker version ID |
+| `staging-url` | Staging URL (workers.dev) |
+| `production-url` | Production URL (custom domain) |
+| `deployment-url` | Best available URL |
+
+### Smoke Test
+
+| Output | Description |
+| ------ | ----------- |
+| `smoke-test-status` | `passed`, `failed`, or `skipped` |
 | `smoke-test-passed` | `true`/`false` (empty if skipped) |
-| `rollback-triggered` | `true`/`false` |
-| `promotion-result` | `success`, `rolled-back`, or `failed` |
+
+### Promotion
+
+| Output | Description |
+| ------ | ----------- |
+| `promotion-status` | Granular status (see table below) |
+| `promotion-result` | Alias for `promotion-status` |
+
+### Rollback
+
+| Output | Description |
+| ------ | ----------- |
+| `rollback-triggered` | Whether rollback was attempted (`true`/`false`) |
+| `rollback-version-id` | Version ID rolled back to |
+| `rollback-succeeded` | Whether rollback succeeded (`true`/`false`) |
+| `post-rollback-healthy` | Whether post-rollback health check passed |
+
+### Promotion Status Values
+
+| Status | Meaning |
+| ------ | ------- |
+| `success` | Deployment and promotion completed successfully |
+| `staging-only` | Candidate deployed and verified (no production promotion) |
+| `dry-run` | Validation only, no deployment |
+| `failed-no-rollback` | Failed, no previous version to rollback to |
+| `failed-rollback-succeeded` | Failed, rolled back to previous version successfully |
+| `failed-rollback-failed` | Failed, rollback also failed (manual intervention needed) |
+| `failed-rollback-disabled` | Failed, auto-rollback was disabled |
+
+---
+
+## Promotion Strategies
+
+### Immediate (default)
+
+Deploys the candidate and promotes to 100% traffic in one step. Post-promotion smoke tests run after deployment.
+
+```yaml
+promotion-strategy: immediate
+```
+
+### Gradual
+
+Uploads the candidate version, then promotes through configurable traffic-split steps. Smoke tests run between each step.
+
+```yaml
+promotion-strategy: gradual
+gradual-steps: '10,50,100'
+gradual-step-wait-seconds: '30'
+post-step-smoke-tests: 'true'
+```
+
+At each step, the action:
+1. Promotes the new version to the specified percentage
+2. Waits the configured interval for propagation
+3. Runs smoke tests against the production URL
+4. On failure: rolls back to the previous stable version
+5. On success: proceeds to the next step
+
+### Staging-Only
+
+Deploys and verifies the candidate without promoting to production traffic. Useful for teams that want release publication to create a validated candidate, leaving final go-live to a separate workflow or manual step.
+
+```yaml
+promotion-strategy: staging-only
+```
+
+---
+
+## Smoke Testing
+
+Smoke tests are production-safety gates, not replacements for full QA suites. They catch obvious regressions before or during promotion.
+
+### Two-Phase Verification
+
+1. **Candidate verification** -- runs after deployment, before promotion. If this fails, no production traffic is affected.
+2. **Post-promotion verification** -- runs after traffic moves. If this fails and rollback is enabled, the previous version is restored.
+
+### Multiple Endpoints
+
+Check multiple paths with a single base URL:
+
+```yaml
+smoke-test-url: https://my-worker.example.workers.dev
+smoke-test-paths: '/health,/api/status,/'
+```
+
+### Custom Commands
+
+Run any shell command as an additional verification gate:
+
+```yaml
+smoke-test-command: 'npm run test:smoke'
+```
+
+If both `smoke-test-url` and `smoke-test-command` are provided, both run. Fetch-based checks execute first, then the custom command.
+
+### Retry Behavior
+
+Each check supports configurable retries to handle transient propagation delays:
+
+```yaml
+smoke-test-retries: '3'
+smoke-test-retry-interval: '2000'
+smoke-test-deadline: '120000'
+```
+
+---
+
+## Automatic Rollback
+
+When `auto-rollback: true` (the default), the action records the current stable version before any changes, then automatically restores it on failure.
+
+### Rollback Triggers
+
+- Candidate smoke tests fail before full promotion
+- A gradual step fails post-step verification
+- Post-promotion health checks fail after 100% traffic
+- Promotion command itself fails
+
+### Post-Rollback Health Check
+
+After rollback, the action runs smoke tests against the restored version to confirm service recovery. The `post-rollback-healthy` output reports the result.
+
+### When Rollback Does Not Apply
+
+- **Pre-deploy failures** -- if deployment never started, there is nothing to roll back
+- **Staging-only failures** -- no production traffic was affected
+- **No previous version** -- first deployment has no rollback target
+- **Rollback disabled** -- `auto-rollback: false` skips recovery
+
+### Failure Transparency
+
+The action does not swallow errors or pretend success. When a failure occurs, the release notes and job summary include:
+
+- Which phase failed (candidate-deploy, candidate-smoke, promotion-step, post-promotion-smoke)
+- What traffic percentage was affected
+- Whether rollback was attempted and whether it succeeded
+- Post-rollback health status
 
 ---
 
@@ -109,71 +299,46 @@ jobs:
 
 ```
 src/
-├── index.ts          # Orchestration entrypoint
-├── inputs.ts         # Parse, normalize, validate inputs
-├── github.ts         # Event resolution & GitHub API ops
-├── cloudflare.ts     # Wrangler CLI wrapper & typed adapters
-├── smoke.ts          # Native fetch-based smoke test engine
-├── promotion.ts      # Promotion plans, gradual rollout, state machine
-├── releaseNotes.ts   # Markdown generation & section management
-├── types.ts          # Shared domain models & error codes
-└── utils.ts          # Helpers (retry, sleep, masking, parsing)
+  index.ts          # Orchestration entrypoint
+  inputs.ts         # Parse, normalize, validate inputs
+  github.ts         # Event resolution and GitHub API ops
+  cloudflare.ts     # Wrangler CLI wrapper and typed adapters
+  smoke.ts          # Native fetch-based smoke test engine
+  promotion.ts      # Promotion plans, strategies, state machine
+  releaseNotes.ts   # Markdown generation and section management
+  types.ts          # Shared domain models and error codes
+  utils.ts          # Helpers (retry, sleep, masking, parsing)
 ```
 
 ### Promotion Flow
 
 ```
-┌──────────┐    ┌───────────┐    ┌──────────────┐    ┌───────────┐
-│  Parse   │───▶│  Resolve  │───▶│   Validate   │───▶│  Deploy   │
-│  Inputs  │    │  Release  │    │   Wrangler   │    │ Candidate │
-└──────────┘    └───────────┘    └──────────────┘    └─────┬─────┘
-                                                           │
-                    ┌──────────────────────────────────────┘
-                    ▼
-            ┌──────────────┐     ┌───────────┐     ┌──────────────┐
-            │  Smoke Test  │────▶│  Promote  │────▶│   Release    │
-            │   (if URL)   │     │  Step N%  │     │   Notes      │
-            └──────┬───────┘     └─────┬─────┘     └──────────────┘
-                   │                   │
-                   │ failed            │ repeat for each step
-                   ▼                   │
-            ┌──────────────┐           │
-            │   Rollback   │◀──────────┘
-            │  to Stable   │     (on failure)
-            └──────────────┘
+  Parse       Resolve      Validate     Deploy
+  Inputs  --> Release  --> Wrangler --> Candidate
+                                          |
+                  .---------------------------'
+                  v
+          Candidate        Promote      Post-Promotion
+          Smoke Test  -->  Step N%  --> Smoke Test
+              |                |            |
+              | failed         | repeat     | failed
+              v                |            v
+          Rollback  <----------'        Rollback
+          to Stable                     to Stable
+              |                             |
+              v                             v
+          Post-Rollback                Post-Rollback
+          Health Check                 Health Check
 ```
-
----
-
-## Gradual Rollout
-
-The `rollout-percentage` input controls traffic splitting:
-
-```yaml
-# Immediate (default)
-rollout-percentage: '100'
-
-# Three-phase rollout with smoke tests between each step
-rollout-percentage: '10,50,100'
-
-# Canary → half → full
-rollout-percentage: '5,50,100'
-```
-
-At each step, the action:
-1. Promotes the new version to the specified percentage
-2. Runs smoke tests (if configured)
-3. On failure: rolls back to the previous stable version
-4. On success: proceeds to the next step
 
 ---
 
 ## Security
 
-- **Secrets masking** — API tokens are masked in all log output via `@actions/core.setSecret()`
-- **Least privilege** — Create a Cloudflare API token scoped only to Workers for the target account
-- **No hardcoded credentials** — Auth resolved from inputs or env vars at runtime
-- **Command hygiene** — CLI invocations never print sensitive environment values
+- **Secrets masking** -- API tokens are masked in all log output via `@actions/core.setSecret()`
+- **Least privilege** -- Create a Cloudflare API token scoped only to Workers for the target account
+- **No hardcoded credentials** -- Auth resolved from inputs or env vars at runtime
+- **Command hygiene** -- CLI invocations never print sensitive environment values
 
 ---
 
