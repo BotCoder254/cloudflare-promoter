@@ -9,6 +9,7 @@ import {
   type SmokeTestConfig,
   type SmokeCheckDefinition,
   type PromotionStrategy,
+  type ReleaseNoteMode,
   ActionError,
   ErrorCode,
 } from './types';
@@ -145,6 +146,22 @@ function resolveSmokeTest(): SmokeTestConfig | undefined {
 }
 
 /**
+ * Normalize a Markdown heading input to plain heading text.
+ * Accepts values like "## Workers Production Promotion" and stores
+ * "Workers Production Promotion".
+ */
+function normalizeSectionHeading(raw: string): string {
+  const stripped = raw.trim().replace(/^#{1,6}\s*/, '').trim();
+  if (!stripped) {
+    throw new ActionError(
+      ErrorCode.INVALID_INPUT,
+      'Invalid deployment-section-heading: heading text cannot be empty.',
+    );
+  }
+  return stripped;
+}
+
+/**
  * Parse, normalize, and validate all action inputs.
  * Fails fast with descriptive error messages.
  */
@@ -230,6 +247,25 @@ export function getInputs(): ActionInputs {
   // GitHub token
   const githubToken = core.getInput('github-token') || process.env['GITHUB_TOKEN'] || '';
 
+  // Release notes mode
+  const releaseNoteModeInput = (core.getInput('release-note-mode') || 'replace-section').toLowerCase();
+  let releaseNoteMode: ReleaseNoteMode;
+  if (releaseNoteModeInput === 'append' || releaseNoteModeInput === 'replace-section') {
+    releaseNoteMode = releaseNoteModeInput;
+  } else {
+    throw new ActionError(
+      ErrorCode.INVALID_INPUT,
+      `Invalid release-note-mode: "${releaseNoteModeInput}". Must be one of: append, replace-section.`,
+    );
+  }
+
+  const deploymentSectionHeading = normalizeSectionHeading(
+    core.getInput('deployment-section-heading') || 'Workers Production Promotion',
+  );
+  core.info(
+    `[inputs] Release notes mode: ${releaseNoteMode}, heading: ${deploymentSectionHeading}`,
+  );
+
   return {
     auth,
     workerName,
@@ -243,5 +279,7 @@ export function getInputs(): ActionInputs {
     autoRollback,
     dryRun,
     githubToken,
+    releaseNoteMode,
+    deploymentSectionHeading,
   };
 }

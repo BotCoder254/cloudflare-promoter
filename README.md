@@ -17,7 +17,7 @@ A marketplace-quality GitHub Action that turns a **GitHub Release** into a contr
 - **Custom smoke commands** -- run any shell command as an additional verification gate
 - **Automatic rollback** -- reverts to the previous stable version on failure, with post-rollback health check
 - **Granular failure status** -- distinguishes `failed-no-rollback`, `failed-rollback-succeeded`, `failed-rollback-failed`, `failed-rollback-disabled`
-- **Release annotations** -- appends structured deployment metadata to the GitHub Release body
+- **Release annotations** -- writes a structured deployment section into the GitHub Release body with configurable `append` or `replace-section` behavior
 - **Dry-run mode** -- validate everything without deploying
 - **Job summaries** -- rich GitHub Actions job summary with rollout tables, lifecycle history, and failure analysis
 - **Secure** -- secrets masking, least-privilege tokens, no hardcoded credentials
@@ -60,7 +60,7 @@ jobs:
 
       - run: npm ci
 
-      - uses: your-org/workers-release-promoter@v1
+      - uses: BotCoder254/cloudflare-promoter@v1
         with:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -68,6 +68,8 @@ jobs:
           environment: production
           promotion-strategy: gradual
           gradual-steps: '10,50,100'
+          release-note-mode: replace-section
+          deployment-section-heading: Workers Production Promotion
           smoke-test-url: https://my-worker.example.workers.dev/health
           smoke-test-expected-status: '200'
 ```
@@ -125,6 +127,8 @@ jobs:
 | `auto-rollback` | No | `true` | Enable automatic rollback on failure |
 | `dry-run` | No | `false` | Validate without deploying |
 | `github-token` | No | `${{ github.token }}` | GitHub token for release annotations |
+| `release-note-mode` | No | `replace-section` | `append` or `replace-section` release-note updates |
+| `deployment-section-heading` | No | `Workers Production Promotion` | Heading text for release-note deployment section |
 
 ---
 
@@ -136,16 +140,24 @@ jobs:
 | ------ | ----------- |
 | `release-tag` | Git tag of the release |
 | `release-id` | GitHub Release ID |
+| `release-url` | GitHub Release page URL |
+| `workflow-run-url` | GitHub Actions workflow run URL |
+| `environment` | Target deployment environment |
+| `promotion-strategy` | Strategy requested by the workflow input |
 
 ### Deployment Metadata
 
 | Output | Description |
 | ------ | ----------- |
+| `worker-name` | Cloudflare Worker name used for deployment |
 | `deployment-id` | Cloudflare deployment ID |
 | `worker-version-id` | Cloudflare Worker version ID |
+| `candidate-version-id` | Candidate Worker version ID (alias of `worker-version-id`) |
+| `version-id` | Backward-compat alias for `worker-version-id` |
 | `staging-url` | Staging URL (workers.dev) |
 | `production-url` | Production URL (custom domain) |
 | `deployment-url` | Best available URL |
+| `previous-stable-version-id` | Version recorded as stable before promotion started |
 
 ### Smoke Test
 
@@ -181,6 +193,40 @@ jobs:
 | `failed-rollback-succeeded` | Failed, rolled back to previous version successfully |
 | `failed-rollback-failed` | Failed, rollback also failed (manual intervention needed) |
 | `failed-rollback-disabled` | Failed, auto-rollback was disabled |
+
+---
+
+## GitHub Release Annotation
+
+Every run can annotate the GitHub Release body with a structured deployment section so the release page becomes the source of truth for delivery status.
+
+The deployment section records at minimum:
+
+- Worker name
+- Release tag and release ID
+- Candidate version ID and deployment ID
+- Staging and production URLs
+- Promotion strategy and promotion result
+- Smoke-test result
+- Rollback information
+- Timestamp
+- GitHub workflow run link (when available)
+
+Release-note update modes:
+
+- `replace-section` (default): keeps one idempotent section under your configured heading
+- `append`: adds a new section for every run
+
+Example configuration:
+
+```yaml
+permissions:
+  contents: write
+
+with:
+  release-note-mode: replace-section
+  deployment-section-heading: Workers Production Promotion
+```
 
 ---
 
@@ -295,6 +341,23 @@ The action does not swallow errors or pretend success. When a failure occurs, th
 
 ---
 
+## Versioning and Adoption
+
+Public consumers should pin this action by major tag for compatibility updates:
+
+```yaml
+uses: BotCoder254/cloudflare-promoter@v1
+```
+
+Release strategy in this repository:
+
+- Immutable semantic tags (for example `v1.0.0`)
+- Movable major channel tags (for example `v1`)
+
+For maximum supply-chain stability, pin to a full commit SHA in critical workflows. For easier updates, pin to the major tag.
+
+---
+
 ## Architecture
 
 ```
@@ -339,6 +402,17 @@ src/
 - **Least privilege** -- Create a Cloudflare API token scoped only to Workers for the target account
 - **No hardcoded credentials** -- Auth resolved from inputs or env vars at runtime
 - **Command hygiene** -- CLI invocations never print sensitive environment values
+
+---
+
+## CI and Release Automation
+
+This repository includes first-party workflows under `.github/workflows/` to keep the action reproducible and consumer-safe:
+
+- `ci.yml` runs lint, tests, TypeScript build, ncc bundle, and verifies committed `dist/` artifacts are up to date
+- `release.yml` runs quality checks on version tags (`v*`) and publishes a GitHub Release
+
+This ensures published tags are validated and the runtime bundle consumed by external repositories is exactly what was reviewed in source control.
 
 ---
 

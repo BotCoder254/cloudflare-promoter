@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────
 
 import * as core from '@actions/core';
+import * as github from '@actions/github';
 import { getInputs } from './inputs';
 import { resolveReleaseContext, updateReleaseBody, createDeploymentStatus } from './github';
 import { ensureWrangler } from './cloudflare';
@@ -37,6 +38,11 @@ async function run(): Promise<void> {
 
     // ── 2. Resolve Release Context ──
     const releaseContext = resolveReleaseContext();
+    const serverUrl = process.env['GITHUB_SERVER_URL'] || 'https://github.com';
+    const runId = github.context.runId ? String(github.context.runId) : process.env['GITHUB_RUN_ID'];
+    const workflowRunUrl = runId
+      ? `${serverUrl}/${releaseContext.owner}/${releaseContext.repo}/actions/runs/${runId}`
+      : '';
     core.info(`[release] Tag: ${releaseContext.tagName} -- ${releaseContext.name}`);
     if (releaseContext.prerelease) {
       core.notice('This is a pre-release.');
@@ -70,14 +76,23 @@ async function run(): Promise<void> {
       // Set outputs for dry run
       core.setOutput('release-tag', releaseContext.tagName);
       core.setOutput('release-id', String(releaseContext.id));
+      core.setOutput('release-url', releaseContext.htmlUrl || '');
+      core.setOutput('workflow-run-url', workflowRunUrl);
+      core.setOutput('environment', inputs.environment);
+      core.setOutput('promotion-strategy', inputs.promotionStrategy);
       core.setOutput('promotion-result', 'dry-run');
       core.setOutput('promotion-status', 'dry-run');
       core.setOutput('rollback-triggered', 'false');
       core.setOutput('rollback-version-id', '');
+      core.setOutput('rollback-succeeded', '');
+      core.setOutput('post-rollback-healthy', '');
       core.setOutput('smoke-test-passed', '');
       core.setOutput('smoke-test-status', 'skipped');
       core.setOutput('deployment-id', '');
       core.setOutput('worker-version-id', '');
+      core.setOutput('candidate-version-id', '');
+      core.setOutput('worker-name', inputs.workerName || '');
+      core.setOutput('previous-stable-version-id', '');
       core.setOutput('deployment-url', '');
       core.setOutput('staging-url', '');
       core.setOutput('production-url', '');
@@ -109,20 +124,30 @@ async function run(): Promise<void> {
     // Release context
     core.setOutput('release-tag', releaseContext.tagName);
     core.setOutput('release-id', String(releaseContext.id));
+    core.setOutput('release-url', releaseContext.htmlUrl || '');
+    core.setOutput('workflow-run-url', workflowRunUrl);
+    core.setOutput('environment', inputs.environment);
+    core.setOutput('promotion-strategy', inputs.promotionStrategy);
 
     // Deployment metadata
+    core.setOutput('worker-name', result.deploy?.workerName || inputs.workerName || '');
     core.setOutput('deployment-id', result.deploy?.deploymentId || '');
     core.setOutput('worker-version-id', result.deploy?.versionId || '');
+    core.setOutput('candidate-version-id', result.deploy?.versionId || '');
     core.setOutput('deployment-url', result.deploy?.url || '');
     core.setOutput('staging-url', result.deploy?.stagingUrl || '');
     core.setOutput('production-url', result.deploy?.productionUrl || '');
+    core.setOutput('previous-stable-version-id', result.previousStableVersionId || '');
     // Backward compat alias
     core.setOutput('version-id', result.deploy?.versionId || '');
 
     // Rollback
     core.setOutput('rollback-triggered', String(result.rollback?.attempted || false));
     core.setOutput('rollback-version-id', result.rollback?.rolledBackToVersionId || '');
-    core.setOutput('rollback-succeeded', String(result.rollback?.success || false));
+    core.setOutput(
+      'rollback-succeeded',
+      result.rollback?.attempted ? String(result.rollback.success) : '',
+    );
     core.setOutput('post-rollback-healthy', result.rollback?.postRollbackHealthy !== undefined
       ? String(result.rollback.postRollbackHealthy)
       : '');
@@ -158,10 +183,23 @@ async function run(): Promise<void> {
     // ── 8. Update Release Notes ──
     const notesSection = buildReleaseNotesSection(
       result,
-      inputs.environment,
-      inputs.rolloutSteps,
+      {
+        environment: inputs.environment,
+        promotionStrategy: inputs.promotionStrategy,
+        rolloutSteps: inputs.rolloutSteps,
+        releaseTag: releaseContext.tagName,
+        releaseId: releaseContext.id,
+        workerName: inputs.workerName,
+        workflowRunUrl: workflowRunUrl || undefined,
+      },
     );
-    await updateReleaseBody(releaseContext, notesSection, inputs.githubToken);
+    await updateReleaseBody(
+      releaseContext,
+      notesSection,
+      inputs.githubToken,
+      inputs.releaseNoteMode,
+      inputs.deploymentSectionHeading,
+    );
 
     // ── 9. Update GitHub Deployment Status ──
     const deployState =

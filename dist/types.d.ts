@@ -71,6 +71,8 @@ export interface SmokeTestConfig {
 }
 /** Promotion strategy */
 export type PromotionStrategy = 'immediate' | 'gradual' | 'staging-only';
+/** GitHub release-note update strategy */
+export type ReleaseNoteMode = 'append' | 'replace-section';
 export interface ActionInputs {
     /** Cloudflare authentication bundle */
     auth: CloudflareAuth;
@@ -96,6 +98,10 @@ export interface ActionInputs {
     dryRun: boolean;
     /** GitHub token for API operations */
     githubToken: string;
+    /** Release-note update mode */
+    releaseNoteMode: ReleaseNoteMode;
+    /** Markdown heading used for the deployment section */
+    deploymentSectionHeading: string;
 }
 export interface ReleaseContext {
     /** Release ID on GitHub */
@@ -319,10 +325,16 @@ export interface PromotionResult {
     completedAt?: string;
 }
 export interface ReleaseNotesSection {
+    /** Worker name */
+    workerName?: string;
+    /** Release ID */
+    releaseId?: number;
     /** Deployment ID */
     deploymentId?: string;
     /** Version ID */
     versionId?: string;
+    /** Candidate version ID (alias for public release-note clarity) */
+    candidateVersionId?: string;
     /** Deployment URL */
     url?: string;
     /** Staging URL */
@@ -331,6 +343,8 @@ export interface ReleaseNotesSection {
     productionUrl?: string;
     /** Smoke test passed? */
     smokeTestPassed?: boolean;
+    /** Smoke test status */
+    smokeTestStatus: 'passed' | 'failed' | 'skipped';
     /** Promotion result */
     promotionResult: string;
     /** Promotion strategy used */
@@ -339,6 +353,8 @@ export interface ReleaseNotesSection {
     promotionStatus?: string;
     /** Whether rollback was triggered */
     rollbackTriggered: boolean;
+    /** Human-readable rollback information */
+    rollbackInformation: string;
     /** Rollback version ID */
     rollbackVersionId?: string;
     /** Whether rollback succeeded */
@@ -357,6 +373,8 @@ export interface ReleaseNotesSection {
     timestamp: string;
     /** Environment */
     environment: string;
+    /** Workflow run link */
+    workflowRunUrl?: string;
     /** Rollout steps summary */
     rolloutSteps?: string;
     /** Previous stable version (for rollback reference) */

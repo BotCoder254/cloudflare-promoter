@@ -114,6 +114,9 @@ export interface SmokeTestConfig {
 /** Promotion strategy */
 export type PromotionStrategy = 'immediate' | 'gradual' | 'staging-only';
 
+/** GitHub release-note update strategy */
+export type ReleaseNoteMode = 'append' | 'replace-section';
+
 export interface ActionInputs {
   /** Cloudflare authentication bundle */
   auth: CloudflareAuth;
@@ -150,6 +153,12 @@ export interface ActionInputs {
 
   /** GitHub token for API operations */
   githubToken: string;
+
+  /** Release-note update mode */
+  releaseNoteMode: ReleaseNoteMode;
+
+  /** Markdown heading used for the deployment section */
+  deploymentSectionHeading: string;
 }
 
 // ─────────────────────────────────────────────────────────
@@ -513,11 +522,20 @@ export interface PromotionResult {
 // ─────────────────────────────────────────────────────────
 
 export interface ReleaseNotesSection {
+  /** Worker name */
+  workerName?: string;
+
+  /** Release ID */
+  releaseId?: number;
+
   /** Deployment ID */
   deploymentId?: string;
 
   /** Version ID */
   versionId?: string;
+
+  /** Candidate version ID (alias for public release-note clarity) */
+  candidateVersionId?: string;
 
   /** Deployment URL */
   url?: string;
@@ -531,6 +549,9 @@ export interface ReleaseNotesSection {
   /** Smoke test passed? */
   smokeTestPassed?: boolean;
 
+  /** Smoke test status */
+  smokeTestStatus: 'passed' | 'failed' | 'skipped';
+
   /** Promotion result */
   promotionResult: string;
 
@@ -542,6 +563,9 @@ export interface ReleaseNotesSection {
 
   /** Whether rollback was triggered */
   rollbackTriggered: boolean;
+
+  /** Human-readable rollback information */
+  rollbackInformation: string;
 
   /** Rollback version ID */
   rollbackVersionId?: string;
@@ -569,6 +593,9 @@ export interface ReleaseNotesSection {
 
   /** Environment */
   environment: string;
+
+  /** Workflow run link */
+  workflowRunUrl?: string;
 
   /** Rollout steps summary */
   rolloutSteps?: string;

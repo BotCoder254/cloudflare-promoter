@@ -1,4 +1,4 @@
-import { type ReleaseContext, type ReleaseNotesSection } from './types';
+import { type ReleaseContext, type ReleaseNotesSection, type ReleaseNoteMode } from './types';
 /**
  * Resolve release context from the GitHub event payload.
  * Primarily supports `release.published`, with graceful fallback info
@@ -9,8 +9,10 @@ export declare function resolveReleaseContext(): ReleaseContext;
  * Update the body of a GitHub Release with deployment information.
  * Uses idempotent section markers so re-runs replace instead of duplicate.
  */
-export declare function updateReleaseBody(releaseContext: ReleaseContext, section: ReleaseNotesSection, githubToken: string): Promise<void>;
+export declare function updateReleaseBody(releaseContext: ReleaseContext, section: ReleaseNotesSection, githubToken: string, mode: ReleaseNoteMode, deploymentSectionHeading: string): Promise<void>;
 /**
  * Create a GitHub deployment status for the current deployment.
  */
 export declare function createDeploymentStatus(releaseContext: ReleaseContext, state: 'success' | 'failure' | 'in_progress', environmentName: string, deploymentUrl: string | undefined, githubToken: string): Promise<void>;
+export declare function renderDeploymentMarkdown(section: ReleaseNotesSection, heading: string): string;
+export declare function mergeReleaseBody(currentBody: string, sectionMarkdown: string, mode: ReleaseNoteMode, heading: string): string;

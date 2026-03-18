@@ -5,31 +5,88 @@
 import { type ReleaseNotesSection, type PromotionResult } from './types';
 import { timestamp } from './utils';
 
+export interface ReleaseNotesContext {
+  environment: string;
+  promotionStrategy: string;
+  rolloutSteps?: number[];
+  releaseTag?: string;
+  releaseId?: number;
+  workerName?: string;
+  workflowRunUrl?: string;
+}
+
+function resolveSmokeTestStatus(
+  result: PromotionResult,
+): { status: 'passed' | 'failed' | 'skipped'; passed?: boolean } {
+  let sawSmokeChecks = false;
+
+  if (result.candidateSmokeResult) {
+    sawSmokeChecks = true;
+    if (!result.candidateSmokeResult.passed) {
+      return { status: 'failed', passed: false };
+    }
+  }
+
+  if (result.postPromotionSmokeResult) {
+    sawSmokeChecks = true;
+    if (!result.postPromotionSmokeResult.passed) {
+      return { status: 'failed', passed: false };
+    }
+  }
+
+  for (const step of result.stepResults) {
+    if (step.smokeTest) {
+      sawSmokeChecks = true;
+      if (!step.smokeTest.passed) {
+        return { status: 'failed', passed: false };
+      }
+    }
+  }
+
+  if (!sawSmokeChecks) {
+    return { status: 'skipped', passed: undefined };
+  }
+
+  return { status: 'passed', passed: true };
+}
+
+function buildRollbackInformation(result: PromotionResult): string {
+  if (!result.rollback?.attempted) {
+    if (result.promotionStatus === 'failed-rollback-disabled') {
+      return 'Rollback applicable but disabled by configuration';
+    }
+
+    if (result.promotionStatus === 'failed-no-rollback') {
+      return 'Rollback not attempted (not applicable or no previous stable version)';
+    }
+
+    return 'Not triggered';
+  }
+
+  const details: string[] = [];
+  details.push(result.rollback.success ? 'Triggered and succeeded' : 'Triggered but failed');
+
+  if (result.rollback.rolledBackToVersionId) {
+    details.push(`target ${result.rollback.rolledBackToVersionId}`);
+  }
+
+  if (result.rollback.postRollbackHealthy !== undefined) {
+    details.push(
+      `post-rollback health ${result.rollback.postRollbackHealthy ? 'passed' : 'failed'}`,
+    );
+  }
+
+  return details.join('; ');
+}
+
 /**
  * Build a ReleaseNotesSection from a PromotionResult and deployment context.
  */
 export function buildReleaseNotesSection(
   result: PromotionResult,
-  environment: string,
-  rolloutSteps?: number[],
+  context: ReleaseNotesContext,
 ): ReleaseNotesSection {
-  let smokeTestPassed: boolean | undefined;
-
-  // Determine smoke test outcome from step results
-  for (const step of result.stepResults) {
-    if (step.smokeTest) {
-      smokeTestPassed = step.smokeTest.passed;
-      if (!smokeTestPassed) break;
-    }
-  }
-
-  // Also check candidate/post-promotion smoke results
-  if (smokeTestPassed === undefined && result.candidateSmokeResult) {
-    smokeTestPassed = result.candidateSmokeResult.passed;
-  }
-  if (smokeTestPassed !== false && result.postPromotionSmokeResult) {
-    smokeTestPassed = result.postPromotionSmokeResult.passed;
-  }
+  const smoke = resolveSmokeTestStatus(result);
 
   const promotionResult = result.state === 'complete'
     ? 'success'
@@ -40,26 +97,32 @@ export function buildReleaseNotesSection(
         : 'failed';
 
   return {
+    workerName: result.deploy?.workerName || context.workerName,
+    releaseId: context.releaseId,
     deploymentId: result.deploy?.deploymentId,
     versionId: result.deploy?.versionId,
+    candidateVersionId: result.deploy?.versionId,
     url: result.deploy?.url,
     stagingUrl: result.deploy?.stagingUrl,
     productionUrl: result.deploy?.productionUrl,
-    smokeTestPassed,
-    promotionResult,
-    promotionStrategy: result.deploy ? (result.state === 'staging-only' ? 'staging-only' : undefined) : undefined,
+    smokeTestPassed: smoke.passed,
+    smokeTestStatus: smoke.status,
+    promotionResult: result.promotionStatus || promotionResult,
+    promotionStrategy: context.promotionStrategy,
     promotionStatus: result.promotionStatus || undefined,
     rollbackTriggered: result.rollback?.attempted || false,
+    rollbackInformation: buildRollbackInformation(result),
     rollbackVersionId: result.rollback?.rolledBackToVersionId,
     rollbackSucceeded: result.rollback?.success,
     postRollbackHealthy: result.rollback?.postRollbackHealthy,
     failurePhase: result.failure?.phase,
-    releaseTag: result.deploy?.releaseTag,
+    releaseTag: context.releaseTag || result.deploy?.releaseTag,
     gitSha: result.deploy?.gitSha,
     sourceTrigger: result.deploy?.sourceTrigger,
     timestamp: result.completedAt || timestamp(),
-    environment,
-    rolloutSteps: rolloutSteps ? rolloutSteps.map((s) => `${s}%`).join(' -> ') : undefined,
+    environment: context.environment,
+    workflowRunUrl: context.workflowRunUrl,
+    rolloutSteps: context.rolloutSteps ? context.rolloutSteps.map((s) => `${s}%`).join(' -> ') : undefined,
     previousStableVersionId: result.previousStableVersionId,
   };
 }

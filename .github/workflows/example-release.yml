@@ -64,7 +64,7 @@ jobs:
       # -- Deploy Worker --
       - name: Deploy Worker
         id: deploy
-        uses: ./  # Use local action for testing; replace with your-org/workers-release-promoter@v1
+        uses: ./  # Use local action for testing; replace with BotCoder254/cloudflare-promoter@v1
         with:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -80,6 +80,8 @@ jobs:
           smoke-test-retry-interval: '2000'
           auto-rollback: 'true'
           dry-run: ${{ github.event.inputs.dry-run || 'false' }}
+          release-note-mode: replace-section
+          deployment-section-heading: Workers Production Promotion
 
       # -- Post-deployment summary --
       - name: Deployment Summary
@@ -90,7 +92,10 @@ jobs:
           echo "| Output | Value |"
           echo "| ------ | ----- |"
           echo "| Release Tag | ${{ steps.deploy.outputs.release-tag }} |"
+          echo "| Release URL | ${{ steps.deploy.outputs.release-url }} |"
+          echo "| Workflow Run | ${{ steps.deploy.outputs.workflow-run-url }} |"
           echo "| Promotion Status | ${{ steps.deploy.outputs.promotion-status }} |"
+          echo "| Worker Name | ${{ steps.deploy.outputs.worker-name }} |"
           echo "| Version ID | ${{ steps.deploy.outputs.worker-version-id }} |"
           echo "| Staging URL | ${{ steps.deploy.outputs.staging-url }} |"
           echo "| Production URL | ${{ steps.deploy.outputs.production-url }} |"

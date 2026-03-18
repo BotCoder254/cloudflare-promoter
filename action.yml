@@ -101,6 +101,14 @@ inputs:
     description: 'GitHub token for updating release notes and creating deployment statuses. Defaults to the automatic GITHUB_TOKEN.'
     required: false
     default: ${{ github.token }}
+  release-note-mode:
+    description: 'How to update the GitHub Release deployment section: "append" adds a new block every run, "replace-section" keeps a single idempotent section.'
+    required: false
+    default: 'replace-section'
+  deployment-section-heading:
+    description: 'Markdown heading text used for the deployment section in the release body.'
+    required: false
+    default: 'Workers Production Promotion'
 
 outputs:
   # ── Release Context ──
@@ -108,18 +116,34 @@ outputs:
     description: 'Git tag of the release that triggered this deployment.'
   release-id:
     description: 'GitHub Release ID.'
+  release-url:
+    description: 'HTML URL of the GitHub Release page.'
+  workflow-run-url:
+    description: 'URL of the GitHub Actions workflow run that executed this deployment.'
+  environment:
+    description: 'Target deployment environment.'
+  promotion-strategy:
+    description: 'Promotion strategy requested by inputs (immediate, gradual, staging-only).'
 
   # ── Deployment Metadata ──
+  worker-name:
+    description: 'Cloudflare Worker name used for deployment.'
   deployment-id:
     description: 'Cloudflare deployment ID of the promoted version.'
   worker-version-id:
     description: 'Cloudflare Worker version ID that was deployed.'
+  candidate-version-id:
+    description: 'Candidate Worker version ID (alias of worker-version-id for release-note clarity).'
+  version-id:
+    description: 'Backward-compat alias for worker-version-id.'
   staging-url:
     description: 'Staging URL (workers.dev) of the deployed Worker.'
   production-url:
     description: 'Production URL (custom domain) of the deployed Worker, if known.'
   deployment-url:
     description: 'Best available URL of the deployed Worker.'
+  previous-stable-version-id:
+    description: 'Version ID recorded as stable before this deployment started.'
 
   # ── Smoke Test ──
   smoke-test-status:

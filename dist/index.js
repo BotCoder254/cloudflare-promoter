@@ -32854,6 +32854,8 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.resolveReleaseContext = resolveReleaseContext;
 exports.updateReleaseBody = updateReleaseBody;
 exports.createDeploymentStatus = createDeploymentStatus;
+exports.renderDeploymentMarkdown = renderDeploymentMarkdown;
+exports.mergeReleaseBody = mergeReleaseBody;
 const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const types_1 = __nccwpck_require__(8522);
@@ -32905,7 +32907,7 @@ function resolveReleaseContext() {
  * Update the body of a GitHub Release with deployment information.
  * Uses idempotent section markers so re-runs replace instead of duplicate.
  */
-async function updateReleaseBody(releaseContext, section, githubToken) {
+async function updateReleaseBody(releaseContext, section, githubToken, mode, deploymentSectionHeading) {
     if (!githubToken) {
         core.warning('No GitHub token provided -- skipping release notes update.');
         return;
@@ -32916,28 +32918,22 @@ async function updateReleaseBody(releaseContext, section, githubToken) {
     }
     try {
         const octokit = github.getOctokit(githubToken);
+        const { data: currentRelease } = await octokit.rest.repos.getRelease({
+            owner: releaseContext.owner,
+            repo: releaseContext.repo,
+            release_id: releaseContext.id,
+        });
+        const currentBody = currentRelease.body || '';
         // Build the deployment section markdown
-        const sectionMd = buildDeploymentMarkdown(section);
-        // Replace or append the section in the release body
-        const marker = '<!-- workers-release-promoter -->';
-        const markerEnd = '<!-- /workers-release-promoter -->';
-        let updatedBody;
-        if (releaseContext.body.includes(marker)) {
-            // Replace existing section
-            const regex = new RegExp(`${escapeRegExp(marker)}[\\s\\S]*?${escapeRegExp(markerEnd)}`, 'g');
-            updatedBody = releaseContext.body.replace(regex, `${marker}\n${sectionMd}\n${markerEnd}`);
-        }
-        else {
-            // Append new section
-            updatedBody = `${releaseContext.body}\n\n${marker}\n${sectionMd}\n${markerEnd}`;
-        }
+        const sectionMd = renderDeploymentMarkdown(section, deploymentSectionHeading);
+        const updatedBody = mergeReleaseBody(currentBody, sectionMd, mode, deploymentSectionHeading);
         await octokit.rest.repos.updateRelease({
             owner: releaseContext.owner,
             repo: releaseContext.repo,
             release_id: releaseContext.id,
             body: updatedBody,
         });
-        core.info('[github] Release notes updated with deployment information');
+        core.info(`[github] Release notes updated (${mode}) under heading "${deploymentSectionHeading}"`);
     }
     catch (err) {
         core.warning(`Failed to update release notes: ${err instanceof Error ? err.message : String(err)}`);
@@ -32981,62 +32977,118 @@ async function createDeploymentStatus(releaseContext, state, environmentName, de
     }
 }
 // ─── Internal Helpers ────────────────────────────────────
-function buildDeploymentMarkdown(section) {
+function renderDeploymentMarkdown(section, heading) {
+    const normalizedHeading = normalizeHeading(heading);
     const lines = [];
-    lines.push('### Cloudflare Workers Deployment');
+    lines.push(`## ${normalizedHeading}`);
     lines.push('');
-    lines.push(`| Field | Value |`);
-    lines.push(`| ----- | ----- |`);
-    lines.push(`| **Environment** | \`${section.environment}\` |`);
-    const resultLabel = section.promotionResult === 'success'
-        ? 'Success'
-        : section.promotionResult === 'staging-only'
-            ? 'Staging-Only'
-            : section.promotionResult === 'rolled-back'
-                ? 'Rolled Back'
-                : 'Failed';
-    lines.push(`| **Result** | ${resultLabel} |`);
-    if (section.promotionStrategy) {
-        lines.push(`| **Strategy** | \`${section.promotionStrategy}\` |`);
-    }
-    if (section.releaseTag) {
-        lines.push(`| **Release** | \`${section.releaseTag}\` |`);
-    }
-    if (section.deploymentId) {
-        lines.push(`| **Deployment ID** | \`${section.deploymentId}\` |`);
-    }
-    if (section.versionId) {
-        lines.push(`| **Version ID** | \`${section.versionId}\` |`);
-    }
-    if (section.stagingUrl) {
-        lines.push(`| **Staging URL** | ${section.stagingUrl} |`);
-    }
-    if (section.productionUrl) {
-        lines.push(`| **Production URL** | ${section.productionUrl} |`);
-    }
-    else if (section.url) {
-        lines.push(`| **URL** | ${section.url} |`);
-    }
-    if (section.gitSha) {
-        lines.push(`| **Git SHA** | \`${section.gitSha.substring(0, 12)}\` |`);
-    }
-    if (section.smokeTestPassed !== undefined) {
-        lines.push(`| **Smoke Test** | ${section.smokeTestPassed ? 'Passed' : 'Failed'} |`);
-    }
-    if (section.rollbackTriggered) {
-        lines.push(`| **Rollback** | Triggered |`);
-        if (section.rollbackVersionId) {
-            lines.push(`| **Rollback Version** | \`${section.rollbackVersionId}\` |`);
-        }
-    }
-    if (section.previousStableVersionId) {
-        lines.push(`| **Previous Stable** | \`${section.previousStableVersionId}\` |`);
+    lines.push('| Field | Value |');
+    lines.push('| ----- | ----- |');
+    lines.push(`| Worker name | ${tableCode(section.workerName)} |`);
+    lines.push(`| Release tag | ${tableCode(section.releaseTag)} |`);
+    lines.push(`| Release ID | ${tableCode(section.releaseId !== undefined ? String(section.releaseId) : undefined)} |`);
+    lines.push(`| Candidate version ID | ${tableCode(section.candidateVersionId || section.versionId)} |`);
+    lines.push(`| Deployment ID | ${tableCode(section.deploymentId)} |`);
+    lines.push(`| Staging URL | ${tableUrl(section.stagingUrl)} |`);
+    lines.push(`| Production URL | ${tableUrl(section.productionUrl)} |`);
+    lines.push(`| Promotion strategy | ${tableCode(section.promotionStrategy)} |`);
+    lines.push(`| Smoke test result | ${tableCode(section.smokeTestStatus)} |`);
+    lines.push(`| Promotion result | ${tableCode(section.promotionResult)} |`);
+    lines.push(`| Rollback information | ${tableText(section.rollbackInformation)} |`);
+    lines.push(`| Timestamp | ${tableCode(section.timestamp)} |`);
+    lines.push(`| GitHub workflow run | ${tableUrl(section.workflowRunUrl)} |`);
+    lines.push(`| Environment | ${tableCode(section.environment)} |`);
+    if (section.url) {
+        lines.push(`| Deployment URL | ${tableUrl(section.url)} |`);
     }
     if (section.rolloutSteps) {
-        lines.push(`| **Rollout** | ${section.rolloutSteps} |`);
+        lines.push(`| Rollout steps | ${tableText(section.rolloutSteps)} |`);
     }
-    lines.push(`| **Timestamp** | ${section.timestamp} |`);
+    if (section.previousStableVersionId) {
+        lines.push(`| Previous stable version | ${tableCode(section.previousStableVersionId)} |`);
+    }
+    if (section.rollbackVersionId) {
+        lines.push(`| Rollback version ID | ${tableCode(section.rollbackVersionId)} |`);
+    }
+    if (section.rollbackSucceeded !== undefined) {
+        lines.push(`| Rollback succeeded | ${tableCode(section.rollbackSucceeded ? 'true' : 'false')} |`);
+    }
+    if (section.postRollbackHealthy !== undefined) {
+        lines.push(`| Post-rollback healthy | ${tableCode(section.postRollbackHealthy ? 'true' : 'false')} |`);
+    }
+    if (section.failurePhase) {
+        lines.push(`| Failure phase | ${tableCode(section.failurePhase)} |`);
+    }
+    if (section.gitSha) {
+        lines.push(`| Git SHA | ${tableCode(section.gitSha.substring(0, 12))} |`);
+    }
+    if (section.sourceTrigger) {
+        lines.push(`| Source trigger | ${tableCode(section.sourceTrigger)} |`);
+    }
+    lines.push('');
     return lines.join('\n');
+}
+function mergeReleaseBody(currentBody, sectionMarkdown, mode, heading) {
+    if (mode === 'append') {
+        return appendMarkdownBlock(currentBody, sectionMarkdown);
+    }
+    const startMarker = buildSectionStartMarker(heading);
+    const endMarker = buildSectionEndMarker(heading);
+    const wrapped = `${startMarker}\n${sectionMarkdown}\n${endMarker}`;
+    if (currentBody.includes(startMarker) && currentBody.includes(endMarker)) {
+        const regex = new RegExp(`${escapeRegExp(startMarker)}[\\s\\S]*?${escapeRegExp(endMarker)}`, 'g');
+        return currentBody.replace(regex, wrapped);
+    }
+    const legacyStartMarker = '<!-- workers-release-promoter -->';
+    const legacyEndMarker = '<!-- /workers-release-promoter -->';
+    if (currentBody.includes(legacyStartMarker) && currentBody.includes(legacyEndMarker)) {
+        const legacyRegex = new RegExp(`${escapeRegExp(legacyStartMarker)}[\\s\\S]*?${escapeRegExp(legacyEndMarker)}`, 'g');
+        return currentBody.replace(legacyRegex, wrapped);
+    }
+    return appendMarkdownBlock(currentBody, wrapped);
+}
+function normalizeHeading(heading) {
+    const normalized = heading.trim().replace(/^#{1,6}\s*/, '').trim();
+    return normalized || 'Workers Production Promotion';
+}
+function appendMarkdownBlock(currentBody, block) {
+    const trimmed = currentBody.trimEnd();
+    if (!trimmed) {
+        return block;
+    }
+    return `${trimmed}\n\n${block}`;
+}
+function buildSectionStartMarker(heading) {
+    return `<!-- workers-release-promoter:${slugifyHeading(heading)}:start -->`;
+}
+function buildSectionEndMarker(heading) {
+    return `<!-- workers-release-promoter:${slugifyHeading(heading)}:end -->`;
+}
+function slugifyHeading(heading) {
+    const slug = normalizeHeading(heading)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    return slug || 'workers-production-promotion';
+}
+function tableCode(value) {
+    if (!value)
+        return 'n/a';
+    return `\`${escapeTableValue(value)}\``;
+}
+function tableText(value) {
+    if (!value)
+        return 'n/a';
+    return escapeTableValue(value);
+}
+function tableUrl(value) {
+    if (!value)
+        return 'n/a';
+    const escaped = escapeTableValue(value);
+    return `[${escaped}](${escaped})`;
+}
+function escapeTableValue(value) {
+    return value.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 }
 function escapeRegExp(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -33088,6 +33140,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
+const github = __importStar(__nccwpck_require__(3228));
 const inputs_1 = __nccwpck_require__(8422);
 const github_1 = __nccwpck_require__(9248);
 const cloudflare_1 = __nccwpck_require__(2316);
@@ -33118,6 +33171,11 @@ async function run() {
         const inputs = (0, inputs_1.getInputs)();
         // ── 2. Resolve Release Context ──
         const releaseContext = (0, github_1.resolveReleaseContext)();
+        const serverUrl = process.env['GITHUB_SERVER_URL'] || 'https://github.com';
+        const runId = github.context.runId ? String(github.context.runId) : process.env['GITHUB_RUN_ID'];
+        const workflowRunUrl = runId
+            ? `${serverUrl}/${releaseContext.owner}/${releaseContext.repo}/actions/runs/${runId}`
+            : '';
         core.info(`[release] Tag: ${releaseContext.tagName} -- ${releaseContext.name}`);
         if (releaseContext.prerelease) {
             core.notice('This is a pre-release.');
@@ -33147,14 +33205,23 @@ async function run() {
             // Set outputs for dry run
             core.setOutput('release-tag', releaseContext.tagName);
             core.setOutput('release-id', String(releaseContext.id));
+            core.setOutput('release-url', releaseContext.htmlUrl || '');
+            core.setOutput('workflow-run-url', workflowRunUrl);
+            core.setOutput('environment', inputs.environment);
+            core.setOutput('promotion-strategy', inputs.promotionStrategy);
             core.setOutput('promotion-result', 'dry-run');
             core.setOutput('promotion-status', 'dry-run');
             core.setOutput('rollback-triggered', 'false');
             core.setOutput('rollback-version-id', '');
+            core.setOutput('rollback-succeeded', '');
+            core.setOutput('post-rollback-healthy', '');
             core.setOutput('smoke-test-passed', '');
             core.setOutput('smoke-test-status', 'skipped');
             core.setOutput('deployment-id', '');
             core.setOutput('worker-version-id', '');
+            core.setOutput('candidate-version-id', '');
+            core.setOutput('worker-name', inputs.workerName || '');
+            core.setOutput('previous-stable-version-id', '');
             core.setOutput('deployment-url', '');
             core.setOutput('staging-url', '');
             core.setOutput('production-url', '');
@@ -33176,18 +33243,25 @@ async function run() {
         // Release context
         core.setOutput('release-tag', releaseContext.tagName);
         core.setOutput('release-id', String(releaseContext.id));
+        core.setOutput('release-url', releaseContext.htmlUrl || '');
+        core.setOutput('workflow-run-url', workflowRunUrl);
+        core.setOutput('environment', inputs.environment);
+        core.setOutput('promotion-strategy', inputs.promotionStrategy);
         // Deployment metadata
+        core.setOutput('worker-name', result.deploy?.workerName || inputs.workerName || '');
         core.setOutput('deployment-id', result.deploy?.deploymentId || '');
         core.setOutput('worker-version-id', result.deploy?.versionId || '');
+        core.setOutput('candidate-version-id', result.deploy?.versionId || '');
         core.setOutput('deployment-url', result.deploy?.url || '');
         core.setOutput('staging-url', result.deploy?.stagingUrl || '');
         core.setOutput('production-url', result.deploy?.productionUrl || '');
+        core.setOutput('previous-stable-version-id', result.previousStableVersionId || '');
         // Backward compat alias
         core.setOutput('version-id', result.deploy?.versionId || '');
         // Rollback
         core.setOutput('rollback-triggered', String(result.rollback?.attempted || false));
         core.setOutput('rollback-version-id', result.rollback?.rolledBackToVersionId || '');
-        core.setOutput('rollback-succeeded', String(result.rollback?.success || false));
+        core.setOutput('rollback-succeeded', result.rollback?.attempted ? String(result.rollback.success) : '');
         core.setOutput('post-rollback-healthy', result.rollback?.postRollbackHealthy !== undefined
             ? String(result.rollback.postRollbackHealthy)
             : '');
@@ -33218,8 +33292,16 @@ async function run() {
         core.setOutput('smoke-test-passed', smokeTestPassed);
         core.setOutput('smoke-test-status', smokeTestStatus);
         // ── 8. Update Release Notes ──
-        const notesSection = (0, releaseNotes_1.buildReleaseNotesSection)(result, inputs.environment, inputs.rolloutSteps);
-        await (0, github_1.updateReleaseBody)(releaseContext, notesSection, inputs.githubToken);
+        const notesSection = (0, releaseNotes_1.buildReleaseNotesSection)(result, {
+            environment: inputs.environment,
+            promotionStrategy: inputs.promotionStrategy,
+            rolloutSteps: inputs.rolloutSteps,
+            releaseTag: releaseContext.tagName,
+            releaseId: releaseContext.id,
+            workerName: inputs.workerName,
+            workflowRunUrl: workflowRunUrl || undefined,
+        });
+        await (0, github_1.updateReleaseBody)(releaseContext, notesSection, inputs.githubToken, inputs.releaseNoteMode, inputs.deploymentSectionHeading);
         // ── 9. Update GitHub Deployment Status ──
         const deployState = result.state === 'complete' || result.state === 'staging-only'
             ? 'success'
@@ -33424,6 +33506,18 @@ function resolveSmokeTest() {
     };
 }
 /**
+ * Normalize a Markdown heading input to plain heading text.
+ * Accepts values like "## Workers Production Promotion" and stores
+ * "Workers Production Promotion".
+ */
+function normalizeSectionHeading(raw) {
+    const stripped = raw.trim().replace(/^#{1,6}\s*/, '').trim();
+    if (!stripped) {
+        throw new types_1.ActionError(types_1.ErrorCode.INVALID_INPUT, 'Invalid deployment-section-heading: heading text cannot be empty.');
+    }
+    return stripped;
+}
+/**
  * Parse, normalize, and validate all action inputs.
  * Fails fast with descriptive error messages.
  */
@@ -33494,6 +33588,17 @@ function getInputs() {
     }
     // GitHub token
     const githubToken = core.getInput('github-token') || process.env['GITHUB_TOKEN'] || '';
+    // Release notes mode
+    const releaseNoteModeInput = (core.getInput('release-note-mode') || 'replace-section').toLowerCase();
+    let releaseNoteMode;
+    if (releaseNoteModeInput === 'append' || releaseNoteModeInput === 'replace-section') {
+        releaseNoteMode = releaseNoteModeInput;
+    }
+    else {
+        throw new types_1.ActionError(types_1.ErrorCode.INVALID_INPUT, `Invalid release-note-mode: "${releaseNoteModeInput}". Must be one of: append, replace-section.`);
+    }
+    const deploymentSectionHeading = normalizeSectionHeading(core.getInput('deployment-section-heading') || 'Workers Production Promotion');
+    core.info(`[inputs] Release notes mode: ${releaseNoteMode}, heading: ${deploymentSectionHeading}`);
     return {
         auth,
         workerName,
@@ -33507,6 +33612,8 @@ function getInputs() {
         autoRollback,
         dryRun,
         githubToken,
+        releaseNoteMode,
+        deploymentSectionHeading,
     };
 }
 
@@ -34102,26 +34209,58 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.buildReleaseNotesSection = buildReleaseNotesSection;
 exports.buildJobSummary = buildJobSummary;
 const utils_1 = __nccwpck_require__(1798);
+function resolveSmokeTestStatus(result) {
+    let sawSmokeChecks = false;
+    if (result.candidateSmokeResult) {
+        sawSmokeChecks = true;
+        if (!result.candidateSmokeResult.passed) {
+            return { status: 'failed', passed: false };
+        }
+    }
+    if (result.postPromotionSmokeResult) {
+        sawSmokeChecks = true;
+        if (!result.postPromotionSmokeResult.passed) {
+            return { status: 'failed', passed: false };
+        }
+    }
+    for (const step of result.stepResults) {
+        if (step.smokeTest) {
+            sawSmokeChecks = true;
+            if (!step.smokeTest.passed) {
+                return { status: 'failed', passed: false };
+            }
+        }
+    }
+    if (!sawSmokeChecks) {
+        return { status: 'skipped', passed: undefined };
+    }
+    return { status: 'passed', passed: true };
+}
+function buildRollbackInformation(result) {
+    if (!result.rollback?.attempted) {
+        if (result.promotionStatus === 'failed-rollback-disabled') {
+            return 'Rollback applicable but disabled by configuration';
+        }
+        if (result.promotionStatus === 'failed-no-rollback') {
+            return 'Rollback not attempted (not applicable or no previous stable version)';
+        }
+        return 'Not triggered';
+    }
+    const details = [];
+    details.push(result.rollback.success ? 'Triggered and succeeded' : 'Triggered but failed');
+    if (result.rollback.rolledBackToVersionId) {
+        details.push(`target ${result.rollback.rolledBackToVersionId}`);
+    }
+    if (result.rollback.postRollbackHealthy !== undefined) {
+        details.push(`post-rollback health ${result.rollback.postRollbackHealthy ? 'passed' : 'failed'}`);
+    }
+    return details.join('; ');
+}
 /**
  * Build a ReleaseNotesSection from a PromotionResult and deployment context.
  */
-function buildReleaseNotesSection(result, environment, rolloutSteps) {
-    let smokeTestPassed;
-    // Determine smoke test outcome from step results
-    for (const step of result.stepResults) {
-        if (step.smokeTest) {
-            smokeTestPassed = step.smokeTest.passed;
-            if (!smokeTestPassed)
-                break;
-        }
-    }
-    // Also check candidate/post-promotion smoke results
-    if (smokeTestPassed === undefined && result.candidateSmokeResult) {
-        smokeTestPassed = result.candidateSmokeResult.passed;
-    }
-    if (smokeTestPassed !== false && result.postPromotionSmokeResult) {
-        smokeTestPassed = result.postPromotionSmokeResult.passed;
-    }
+function buildReleaseNotesSection(result, context) {
+    const smoke = resolveSmokeTestStatus(result);
     const promotionResult = result.state === 'complete'
         ? 'success'
         : result.state === 'staging-only'
@@ -34130,26 +34269,32 @@ function buildReleaseNotesSection(result, environment, rolloutSteps) {
                 ? 'rolled-back'
                 : 'failed';
     return {
+        workerName: result.deploy?.workerName || context.workerName,
+        releaseId: context.releaseId,
         deploymentId: result.deploy?.deploymentId,
         versionId: result.deploy?.versionId,
+        candidateVersionId: result.deploy?.versionId,
         url: result.deploy?.url,
         stagingUrl: result.deploy?.stagingUrl,
         productionUrl: result.deploy?.productionUrl,
-        smokeTestPassed,
-        promotionResult,
-        promotionStrategy: result.deploy ? (result.state === 'staging-only' ? 'staging-only' : undefined) : undefined,
+        smokeTestPassed: smoke.passed,
+        smokeTestStatus: smoke.status,
+        promotionResult: result.promotionStatus || promotionResult,
+        promotionStrategy: context.promotionStrategy,
         promotionStatus: result.promotionStatus || undefined,
         rollbackTriggered: result.rollback?.attempted || false,
+        rollbackInformation: buildRollbackInformation(result),
         rollbackVersionId: result.rollback?.rolledBackToVersionId,
         rollbackSucceeded: result.rollback?.success,
         postRollbackHealthy: result.rollback?.postRollbackHealthy,
         failurePhase: result.failure?.phase,
-        releaseTag: result.deploy?.releaseTag,
+        releaseTag: context.releaseTag || result.deploy?.releaseTag,
         gitSha: result.deploy?.gitSha,
         sourceTrigger: result.deploy?.sourceTrigger,
         timestamp: result.completedAt || (0, utils_1.timestamp)(),
-        environment,
-        rolloutSteps: rolloutSteps ? rolloutSteps.map((s) => `${s}%`).join(' -> ') : undefined,
+        environment: context.environment,
+        workflowRunUrl: context.workflowRunUrl,
+        rolloutSteps: context.rolloutSteps ? context.rolloutSteps.map((s) => `${s}%`).join(' -> ') : undefined,
         previousStableVersionId: result.previousStableVersionId,
     };
 }
