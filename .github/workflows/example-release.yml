@@ -15,10 +15,10 @@
 name: Deploy Worker on Release
 
 on:
-  release:
-    types: [published]
-
-  # Optional: allow manual triggering for testing
+  # Manual trigger for action validation in this repository.
+  # In consumer repositories, you can also add:
+  # release:
+  #   types: [published]
   workflow_dispatch:
     inputs:
       dry-run:
@@ -44,7 +44,6 @@ jobs:
   deploy:
     name: Deploy to Cloudflare Workers
     runs-on: ubuntu-latest
-    if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
 
     steps:
       # -- Checkout --
