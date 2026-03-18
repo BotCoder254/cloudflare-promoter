@@ -65,9 +65,19 @@ async function run(): Promise<void> {
       core.info('🔍 Dry run complete — no deployments were made.');
 
       // Set outputs for dry run
+      core.setOutput('release-tag', releaseContext.tagName);
+      core.setOutput('release-id', String(releaseContext.id));
       core.setOutput('promotion-result', 'dry-run');
+      core.setOutput('promotion-status', 'dry-run');
       core.setOutput('rollback-triggered', 'false');
+      core.setOutput('rollback-version-id', '');
       core.setOutput('smoke-test-passed', '');
+      core.setOutput('smoke-test-status', 'skipped');
+      core.setOutput('deployment-id', '');
+      core.setOutput('worker-version-id', '');
+      core.setOutput('deployment-url', '');
+      core.setOutput('staging-url', '');
+      core.setOutput('production-url', '');
       return;
     }
 
@@ -87,31 +97,47 @@ async function run(): Promise<void> {
     core.info(`   Smoke tests: ${plan.smokeTestEnabled ? '✅ enabled' : '⏭️  disabled'}`);
     core.info('');
 
-    const result = await executePromotion(inputs, plan);
+    const result = await executePromotion(inputs, plan, releaseContext);
 
     // ── 7. Set Outputs ──
+    // Release context
+    core.setOutput('release-tag', releaseContext.tagName);
+    core.setOutput('release-id', String(releaseContext.id));
+
+    // Deployment metadata
     core.setOutput('deployment-id', result.deploy?.deploymentId || '');
-    core.setOutput('version-id', result.deploy?.versionId || '');
+    core.setOutput('worker-version-id', result.deploy?.versionId || '');
     core.setOutput('deployment-url', result.deploy?.url || '');
+    core.setOutput('staging-url', result.deploy?.stagingUrl || '');
+    core.setOutput('production-url', result.deploy?.productionUrl || '');
+    // Backward compat alias
+    core.setOutput('version-id', result.deploy?.versionId || '');
+
+    // Rollback
     core.setOutput('rollback-triggered', String(result.state === 'rolled-back'));
-    core.setOutput(
-      'promotion-result',
-      result.state === 'complete'
-        ? 'success'
-        : result.state === 'rolled-back'
-          ? 'rolled-back'
-          : 'failed',
-    );
+    core.setOutput('rollback-version-id', result.rollback?.rolledBackToVersionId || '');
+
+    // Promotion status
+    const promotionStatus = result.state === 'complete'
+      ? 'success'
+      : result.state === 'rolled-back'
+        ? 'rolled-back'
+        : 'failed';
+    core.setOutput('promotion-result', promotionStatus);
+    core.setOutput('promotion-status', promotionStatus);
 
     // Determine smoke test output
     let smokeTestPassed = '';
+    let smokeTestStatus = 'skipped';
     for (const step of result.stepResults) {
       if (step.smokeTest) {
         smokeTestPassed = String(step.smokeTest.passed);
+        smokeTestStatus = step.smokeTest.passed ? 'passed' : 'failed';
         if (!step.smokeTest.passed) break;
       }
     }
     core.setOutput('smoke-test-passed', smokeTestPassed);
+    core.setOutput('smoke-test-status', smokeTestStatus);
 
     // ── 8. Update Release Notes ──
     const notesSection = buildReleaseNotesSection(

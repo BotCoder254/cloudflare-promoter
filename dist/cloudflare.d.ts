@@ -1,4 +1,4 @@
-import { type ActionInputs, type DeployResult, type RollbackResult, type PromotionStepResult } from './types';
+import { type ActionInputs, type DeployResult, type ReleaseContext, type RollbackResult, type PromotionStepResult } from './types';
 /**
  * Ensure Wrangler is available in the path.
  */
@@ -6,8 +6,11 @@ export declare function ensureWrangler(inputs: ActionInputs): Promise<void>;
 /**
  * Deploy the Worker candidate using `wrangler deploy`.
  * This uploads code and immediately routes traffic to the new version.
+ *
+ * Captures full deployment metadata including release correlation,
+ * git context, and parsed staging/production URLs.
  */
-export declare function deployCandidate(inputs: ActionInputs): Promise<DeployResult>;
+export declare function deployCandidate(inputs: ActionInputs, releaseContext?: ReleaseContext): Promise<DeployResult>;
 /**
  * Upload a new version without deploying it using `wrangler versions upload`.
  * Returns the version ID for subsequent gradual promotion.

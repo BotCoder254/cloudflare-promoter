@@ -1,4 +1,4 @@
-import { type ActionInputs, type PromotionPlan, type PromotionResult } from './types';
+import { type ActionInputs, type PromotionPlan, type PromotionResult, type ReleaseContext } from './types';
 /**
  * Build a promotion plan from action inputs.
  */
@@ -14,4 +14,4 @@ export declare function buildPromotionPlan(inputs: ActionInputs): PromotionPlan;
  *     c. On failure → rollback to stable
  *  4. Return the overall result
  */
-export declare function executePromotion(inputs: ActionInputs, plan: PromotionPlan): Promise<PromotionResult>;
+export declare function executePromotion(inputs: ActionInputs, plan: PromotionPlan, releaseContext?: ReleaseContext): Promise<PromotionResult>;

@@ -1,6 +1,6 @@
 name: 'Workers Release Promoter'
 description: 'Turn a GitHub Release into a controlled Cloudflare Workers production promotion flow with staged rollout, smoke-test gating, and automatic rollback.'
-author: ''
+author: 'TELVIN TEUM'
 
 branding:
   icon: 'upload-cloud'
@@ -56,18 +56,41 @@ inputs:
     default: ${{ github.token }}
 
 outputs:
+  # ── Release context ──
+  release-tag:
+    description: 'Git tag of the release that triggered this deployment.'
+  release-id:
+    description: 'GitHub Release ID.'
+
+  # ── Deployment metadata ──
   deployment-id:
     description: 'Cloudflare deployment ID of the promoted version.'
-  version-id:
+  worker-version-id:
     description: 'Cloudflare Worker version ID that was deployed.'
+  staging-url:
+    description: 'Staging URL (workers.dev) of the deployed Worker.'
+  production-url:
+    description: 'Production URL (custom domain) of the deployed Worker, if known.'
   deployment-url:
-    description: 'URL of the deployed Worker.'
+    description: 'Best available URL of the deployed Worker.'
+
+  # ── Smoke test ──
+  smoke-test-status:
+    description: 'Smoke test outcome: "passed", "failed", or "skipped".'
   smoke-test-passed:
     description: 'Whether smoke tests passed (true/false). Empty if skipped.'
+
+  # ── Promotion ──
+  promotion-status:
+    description: 'Overall promotion status: "success", "rolled-back", "failed", or "dry-run".'
+  promotion-result:
+    description: 'Alias for promotion-status (backward compat): "success", "rolled-back", or "failed".'
+
+  # ── Rollback ──
   rollback-triggered:
     description: 'Whether an automatic rollback was triggered (true/false).'
-  promotion-result:
-    description: 'Overall promotion result: "success", "rolled-back", or "failed".'
+  rollback-version-id:
+    description: 'Version ID that was rolled back to, if rollback occurred.'
 
 runs:
   using: 'node20'

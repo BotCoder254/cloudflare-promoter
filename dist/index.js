@@ -32519,7 +32519,9 @@ exports.lookupCurrentStableVersion = lookupCurrentStableVersion;
 exports.promoteVersion = promoteVersion;
 exports.rollbackToVersion = rollbackToVersion;
 const core = __importStar(__nccwpck_require__(7484));
+const github = __importStar(__nccwpck_require__(3228));
 const types_1 = __nccwpck_require__(8522);
+const utils_1 = __nccwpck_require__(1798);
 /**
  * Execute a Wrangler CLI command with proper environment setup.
  * All Cloudflare commands flow through this single bottleneck.
@@ -32575,8 +32577,11 @@ async function ensureWrangler(inputs) {
 /**
  * Deploy the Worker candidate using `wrangler deploy`.
  * This uploads code and immediately routes traffic to the new version.
+ *
+ * Captures full deployment metadata including release correlation,
+ * git context, and parsed staging/production URLs.
  */
-async function deployCandidate(inputs) {
+async function deployCandidate(inputs, releaseContext) {
     core.info('🚀 Deploying candidate Worker version…');
     const args = ['deploy'];
     if (inputs.workerName) {
@@ -32586,22 +32591,38 @@ async function deployCandidate(inputs) {
         args.push('--env', inputs.environment);
     }
     const result = await execWrangler(args, inputs);
+    const rawOutput = `${result.stdout}\n${result.stderr}`.trim();
     if (result.exitCode !== 0) {
         return {
             success: false,
+            workerName: inputs.workerName,
+            releaseTag: releaseContext?.tagName,
+            sourceTrigger: github.context.eventName,
+            gitSha: github.context.sha,
+            gitRef: github.context.ref,
             stdout: result.stdout,
             stderr: result.stderr,
+            rawOutput,
         };
     }
     // Parse deployment info from stdout
     const parsed = parseDeployOutput(result.stdout);
     return {
         success: true,
+        workerName: inputs.workerName || parsed.workerName,
+        releaseTag: releaseContext?.tagName,
         versionId: parsed.versionId,
         deploymentId: parsed.deploymentId,
-        url: parsed.url,
+        stagingUrl: parsed.stagingUrl,
+        productionUrl: parsed.productionUrl,
+        url: parsed.productionUrl || parsed.stagingUrl,
+        deployedAt: (0, utils_1.timestamp)(),
+        sourceTrigger: github.context.eventName,
+        gitSha: github.context.sha,
+        gitRef: github.context.ref,
         stdout: result.stdout,
         stderr: result.stderr,
+        rawOutput,
     };
 }
 /**
@@ -32755,17 +32776,26 @@ function parseDeployOutput(stdout) {
         result.versionId = uuidMatch[1];
         result.deploymentId = uuidMatch[1];
     }
-    // Try to extract the deployment URL
-    const urlMatch = stdout.match(/https:\/\/[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.workers\.dev/);
-    if (urlMatch?.[0]) {
-        result.url = urlMatch[0];
+    // Try to extract worker name from output
+    const nameMatch = stdout.match(/Uploaded\s+([a-zA-Z0-9_-]+)/i)
+        || stdout.match(/Published\s+([a-zA-Z0-9_-]+)/i);
+    if (nameMatch?.[1]) {
+        result.workerName = nameMatch[1];
     }
-    // Fallback URL pattern for custom domains
-    if (!result.url) {
-        const customUrlMatch = stdout.match(/Published\s+.*?\s+to\s+(https?:\/\/\S+)/i);
-        if (customUrlMatch?.[1]) {
-            result.url = customUrlMatch[1];
-        }
+    // Extract staging URL (workers.dev)
+    const workersDevMatch = stdout.match(/https:\/\/[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.workers\.dev/);
+    if (workersDevMatch?.[0]) {
+        result.stagingUrl = workersDevMatch[0];
+    }
+    // Extract production URL (custom domains / routes)
+    const customUrlMatch = stdout.match(/Published\s+.*?\s+to\s+(https?:\/\/(?!.*workers\.dev)\S+)/i);
+    if (customUrlMatch?.[1]) {
+        result.productionUrl = customUrlMatch[1];
+    }
+    // Also check route patterns
+    const routeMatch = stdout.match(/route:\s*(https?:\/\/(?!.*workers\.dev)\S+)/i);
+    if (routeMatch?.[1] && !result.productionUrl) {
+        result.productionUrl = routeMatch[1];
     }
     return result;
 }
@@ -33078,9 +33108,19 @@ async function run() {
             core.info('');
             core.info('🔍 Dry run complete — no deployments were made.');
             // Set outputs for dry run
+            core.setOutput('release-tag', releaseContext.tagName);
+            core.setOutput('release-id', String(releaseContext.id));
             core.setOutput('promotion-result', 'dry-run');
+            core.setOutput('promotion-status', 'dry-run');
             core.setOutput('rollback-triggered', 'false');
+            core.setOutput('rollback-version-id', '');
             core.setOutput('smoke-test-passed', '');
+            core.setOutput('smoke-test-status', 'skipped');
+            core.setOutput('deployment-id', '');
+            core.setOutput('worker-version-id', '');
+            core.setOutput('deployment-url', '');
+            core.setOutput('staging-url', '');
+            core.setOutput('production-url', '');
             return;
         }
         // ── 5. Create GitHub deployment (in_progress) ──
@@ -33091,27 +33131,43 @@ async function run() {
         core.info(`📋 Promotion plan: ${plan.steps.join('% → ')}%`);
         core.info(`   Smoke tests: ${plan.smokeTestEnabled ? '✅ enabled' : '⏭️  disabled'}`);
         core.info('');
-        const result = await (0, promotion_1.executePromotion)(inputs, plan);
+        const result = await (0, promotion_1.executePromotion)(inputs, plan, releaseContext);
         // ── 7. Set Outputs ──
+        // Release context
+        core.setOutput('release-tag', releaseContext.tagName);
+        core.setOutput('release-id', String(releaseContext.id));
+        // Deployment metadata
         core.setOutput('deployment-id', result.deploy?.deploymentId || '');
-        core.setOutput('version-id', result.deploy?.versionId || '');
+        core.setOutput('worker-version-id', result.deploy?.versionId || '');
         core.setOutput('deployment-url', result.deploy?.url || '');
+        core.setOutput('staging-url', result.deploy?.stagingUrl || '');
+        core.setOutput('production-url', result.deploy?.productionUrl || '');
+        // Backward compat alias
+        core.setOutput('version-id', result.deploy?.versionId || '');
+        // Rollback
         core.setOutput('rollback-triggered', String(result.state === 'rolled-back'));
-        core.setOutput('promotion-result', result.state === 'complete'
+        core.setOutput('rollback-version-id', result.rollback?.rolledBackToVersionId || '');
+        // Promotion status
+        const promotionStatus = result.state === 'complete'
             ? 'success'
             : result.state === 'rolled-back'
                 ? 'rolled-back'
-                : 'failed');
+                : 'failed';
+        core.setOutput('promotion-result', promotionStatus);
+        core.setOutput('promotion-status', promotionStatus);
         // Determine smoke test output
         let smokeTestPassed = '';
+        let smokeTestStatus = 'skipped';
         for (const step of result.stepResults) {
             if (step.smokeTest) {
                 smokeTestPassed = String(step.smokeTest.passed);
+                smokeTestStatus = step.smokeTest.passed ? 'passed' : 'failed';
                 if (!step.smokeTest.passed)
                     break;
             }
         }
         core.setOutput('smoke-test-passed', smokeTestPassed);
+        core.setOutput('smoke-test-status', smokeTestStatus);
         // ── 8. Update Release Notes ──
         const notesSection = (0, releaseNotes_1.buildReleaseNotesSection)(result, inputs.environment, inputs.rolloutSteps);
         await (0, github_1.updateReleaseBody)(releaseContext, notesSection, inputs.githubToken);
@@ -33355,9 +33411,27 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.buildPromotionPlan = buildPromotionPlan;
 exports.executePromotion = executePromotion;
 const core = __importStar(__nccwpck_require__(7484));
+const github = __importStar(__nccwpck_require__(3228));
 const cloudflare = __importStar(__nccwpck_require__(2316));
 const smoke_1 = __nccwpck_require__(2754);
 const utils_1 = __nccwpck_require__(1798);
+/**
+ * Create a new lifecycle tracker starting at a given state.
+ */
+function createLifecycleTracker(initial) {
+    return {
+        current: initial,
+        history: [{ state: initial, timestamp: (0, utils_1.timestamp)() }],
+    };
+}
+/**
+ * Transition the lifecycle tracker to a new state.
+ */
+function transition(tracker, state) {
+    tracker.current = state;
+    tracker.history.push({ state, timestamp: (0, utils_1.timestamp)() });
+    core.info(`    [lifecycle] ${state}`);
+}
 /**
  * Build a promotion plan from action inputs.
  */
@@ -33380,11 +33454,14 @@ function buildPromotionPlan(inputs) {
  *     c. On failure → rollback to stable
  *  4. Return the overall result
  */
-async function executePromotion(inputs, plan) {
+async function executePromotion(inputs, plan, releaseContext) {
+    const lifecycle = createLifecycleTracker('context_resolved');
+    transition(lifecycle, 'auth_ready');
     const result = {
         state: 'pending',
         stepResults: [],
         startedAt: (0, utils_1.timestamp)(),
+        lifecycle,
     };
     try {
         // ── Step 1: Look up current stable version ──
@@ -33402,14 +33479,18 @@ async function executePromotion(inputs, plan) {
             core.info('═══════════════════════════════════════════');
             core.info('  Phase 2: Deploying (immediate 100%)');
             core.info('═══════════════════════════════════════════');
-            const deployResult = await cloudflare.deployCandidate(inputs);
+            const deployResult = await cloudflare.deployCandidate(inputs, releaseContext);
             result.deploy = deployResult;
             if (!deployResult.success) {
                 result.state = 'failed';
                 result.error = `Deployment failed: ${deployResult.stderr}`;
                 result.completedAt = (0, utils_1.timestamp)();
+                transition(lifecycle, 'failed');
                 return result;
             }
+            transition(lifecycle, 'candidate_deployed');
+            // ── Log deployment summary ──
+            logCandidateSummary(deployResult, result.previousStableVersionId);
             // Record the step result
             const stepResult = {
                 percentage: 100,
@@ -33419,6 +33500,7 @@ async function executePromotion(inputs, plan) {
             // ── Smoke test at 100% ──
             if (inputs.smokeTest) {
                 result.state = 'smoke-testing';
+                transition(lifecycle, 'smoke_tests_running');
                 core.info('');
                 core.info('═══════════════════════════════════════════');
                 core.info('  Phase 3: Smoke Testing');
@@ -33434,13 +33516,16 @@ async function executePromotion(inputs, plan) {
                     result.stepResults.push(stepResult);
                     // Rollback
                     if (previousStableVersionId) {
+                        transition(lifecycle, 'rollback_in_progress');
                         const rollbackResult = await cloudflare.rollbackToVersion(previousStableVersionId, inputs);
                         result.rollback = rollbackResult;
                         result.state = 'rolled-back';
+                        transition(lifecycle, 'rolled_back');
                     }
                     else {
                         core.warning('⚠️ No previous version available for rollback.');
                         result.state = 'failed';
+                        transition(lifecycle, 'failed');
                     }
                     result.error = `Smoke test failed: ${smokeResult.error || 'Unexpected failure'}`;
                     result.completedAt = (0, utils_1.timestamp)();
@@ -33450,6 +33535,7 @@ async function executePromotion(inputs, plan) {
             result.stepResults.push(stepResult);
             result.state = 'complete';
             result.completedAt = (0, utils_1.timestamp)();
+            transition(lifecycle, 'promoted');
             return result;
         }
         // ── Gradual rollout ──
@@ -33458,12 +33544,14 @@ async function executePromotion(inputs, plan) {
         core.info('  Phase 2: Uploading Version (Gradual Rollout)');
         core.info('═══════════════════════════════════════════');
         const newVersionId = await cloudflare.uploadVersion(inputs);
+        transition(lifecycle, 'candidate_deployed');
         // Give Cloudflare a moment to register the version
         await (0, utils_1.sleep)(2000);
         // ── Step 3: Gradual promotion steps ──
         for (let i = 0; i < plan.steps.length; i++) {
             const pct = plan.steps[i];
             result.state = 'promoting';
+            transition(lifecycle, 'promotion_in_progress');
             core.info('');
             core.info('═══════════════════════════════════════════');
             core.info(`  Phase ${3 + i}: Promoting to ${pct}% (step ${i + 1}/${plan.steps.length})`);
@@ -33473,6 +33561,7 @@ async function executePromotion(inputs, plan) {
             // or always on the last step)
             if (inputs.smokeTest) {
                 result.state = 'smoke-testing';
+                transition(lifecycle, 'smoke_tests_running');
                 core.info('⏳ Waiting 5s for traffic shift to propagate…');
                 await (0, utils_1.sleep)(5000);
                 const smokeResult = await (0, smoke_1.runSmokeTest)(inputs.smokeTest);
@@ -33483,13 +33572,16 @@ async function executePromotion(inputs, plan) {
                     result.stepResults.push(stepResult);
                     // Rollback
                     if (previousStableVersionId) {
+                        transition(lifecycle, 'rollback_in_progress');
                         const rollbackResult = await cloudflare.rollbackToVersion(previousStableVersionId, inputs);
                         result.rollback = rollbackResult;
                         result.state = 'rolled-back';
+                        transition(lifecycle, 'rolled_back');
                     }
                     else {
                         core.warning('⚠️ No previous version available for rollback.');
                         result.state = 'failed';
+                        transition(lifecycle, 'failed');
                     }
                     result.error = `Smoke test failed at ${pct}%: ${smokeResult.error || 'Unexpected failure'}`;
                     result.completedAt = (0, utils_1.timestamp)();
@@ -33500,12 +33592,15 @@ async function executePromotion(inputs, plan) {
                 core.error(`❌ Promotion to ${pct}% failed — initiating rollback…`);
                 result.stepResults.push(stepResult);
                 if (previousStableVersionId) {
+                    transition(lifecycle, 'rollback_in_progress');
                     const rollbackResult = await cloudflare.rollbackToVersion(previousStableVersionId, inputs);
                     result.rollback = rollbackResult;
                     result.state = 'rolled-back';
+                    transition(lifecycle, 'rolled_back');
                 }
                 else {
                     result.state = 'failed';
+                    transition(lifecycle, 'failed');
                 }
                 result.error = `Promotion failed at ${pct}%: ${stepResult.message}`;
                 result.completedAt = (0, utils_1.timestamp)();
@@ -33514,15 +33609,21 @@ async function executePromotion(inputs, plan) {
             result.stepResults.push(stepResult);
             core.info(`✅ Step ${i + 1}/${plan.steps.length} complete: ${pct}%`);
         }
-        // Set deploy result from version upload info
         result.deploy = {
             success: true,
             versionId: newVersionId,
+            workerName: inputs.workerName,
+            releaseTag: releaseContext?.tagName,
+            sourceTrigger: github.context.eventName,
+            gitSha: github.context.sha,
+            gitRef: github.context.ref,
+            deployedAt: (0, utils_1.timestamp)(),
             stdout: '',
             stderr: '',
         };
         result.state = 'complete';
         result.completedAt = (0, utils_1.timestamp)();
+        transition(lifecycle, 'promoted');
         return result;
     }
     catch (err) {
@@ -33532,17 +33633,51 @@ async function executePromotion(inputs, plan) {
         // Attempt emergency rollback
         if (result.previousStableVersionId) {
             core.warning('⚠️ Unexpected error — attempting emergency rollback…');
+            transition(lifecycle, 'rollback_in_progress');
             try {
                 const rollbackResult = await cloudflare.rollbackToVersion(result.previousStableVersionId, inputs);
                 result.rollback = rollbackResult;
                 result.state = 'rolled-back';
+                transition(lifecycle, 'rolled_back');
             }
             catch (rollbackErr) {
                 core.error(`❌ Emergency rollback also failed: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`);
+                transition(lifecycle, 'failed');
             }
+        }
+        else {
+            transition(lifecycle, 'failed');
         }
         return result;
     }
+}
+/**
+ * Log concise deployment summary for operator visibility.
+ * Appears in both CI logs and job summary.
+ */
+function logCandidateSummary(deploy, previousStableVersionId) {
+    core.info('');
+    core.info('─── Candidate Deployment Summary ──────────────');
+    core.info(`  Worker:            ${deploy.workerName || '(from config)'}`);
+    core.info(`  Release Tag:       ${deploy.releaseTag || '(none)'}`);
+    core.info(`  Version ID:        ${deploy.versionId || '(unknown)'}`);
+    core.info(`  Deployment ID:     ${deploy.deploymentId || '(unknown)'}`);
+    if (deploy.stagingUrl)
+        core.info(`  Staging URL:       ${deploy.stagingUrl}`);
+    if (deploy.productionUrl)
+        core.info(`  Production URL:    ${deploy.productionUrl}`);
+    core.info(`  Git SHA:           ${deploy.gitSha || '(unknown)'}`);
+    core.info(`  Git Ref:           ${deploy.gitRef || '(unknown)'}`);
+    core.info(`  Source Trigger:    ${deploy.sourceTrigger || '(unknown)'}`);
+    core.info(`  Deployed At:       ${deploy.deployedAt || '(unknown)'}`);
+    if (previousStableVersionId) {
+        core.info(`  Previous Stable:   ${previousStableVersionId}`);
+    }
+    else {
+        core.info(`  Previous Stable:   (none — first deployment)`);
+    }
+    core.info('─────────────────────────────────────────────');
+    core.info('');
 }
 
 
@@ -33577,6 +33712,8 @@ function buildReleaseNotesSection(result, environment, rolloutSteps) {
         deploymentId: result.deploy?.deploymentId,
         versionId: result.deploy?.versionId,
         url: result.deploy?.url,
+        stagingUrl: result.deploy?.stagingUrl,
+        productionUrl: result.deploy?.productionUrl,
         smokeTestPassed,
         promotionResult: result.state === 'complete'
             ? 'success'
@@ -33584,9 +33721,14 @@ function buildReleaseNotesSection(result, environment, rolloutSteps) {
                 ? 'rolled-back'
                 : 'failed',
         rollbackTriggered: result.state === 'rolled-back',
+        rollbackVersionId: result.rollback?.rolledBackToVersionId,
+        releaseTag: result.deploy?.releaseTag,
+        gitSha: result.deploy?.gitSha,
+        sourceTrigger: result.deploy?.sourceTrigger,
         timestamp: result.completedAt || (0, utils_1.timestamp)(),
         environment,
         rolloutSteps: rolloutSteps ? rolloutSteps.map((s) => `${s}%`).join(' → ') : undefined,
+        previousStableVersionId: result.previousStableVersionId,
     };
 }
 /**
@@ -33624,8 +33766,23 @@ function buildJobSummary(result, environment, tagName) {
     if (result.deploy?.deploymentId) {
         lines.push(`| **Deployment ID** | \`${result.deploy.deploymentId}\` |`);
     }
-    if (result.deploy?.url) {
+    if (result.deploy?.stagingUrl) {
+        lines.push(`| **Staging URL** | ${result.deploy.stagingUrl} |`);
+    }
+    if (result.deploy?.productionUrl) {
+        lines.push(`| **Production URL** | ${result.deploy.productionUrl} |`);
+    }
+    else if (result.deploy?.url) {
         lines.push(`| **URL** | ${result.deploy.url} |`);
+    }
+    if (result.deploy?.gitSha) {
+        lines.push(`| **Git SHA** | \`${result.deploy.gitSha.substring(0, 12)}\` |`);
+    }
+    if (result.deploy?.sourceTrigger) {
+        lines.push(`| **Trigger** | \`${result.deploy.sourceTrigger}\` |`);
+    }
+    if (result.previousStableVersionId) {
+        lines.push(`| **Previous Stable** | \`${result.previousStableVersionId}\` |`);
     }
     lines.push(`| **Started** | ${result.startedAt} |`);
     if (result.completedAt) {
@@ -33664,6 +33821,17 @@ function buildJobSummary(result, environment, tagName) {
         lines.push('### ❌ Error');
         lines.push('');
         lines.push(`\`\`\`\n${result.error}\n\`\`\``);
+        lines.push('');
+    }
+    // Lifecycle history
+    if (result.lifecycle && result.lifecycle.history.length > 0) {
+        lines.push('### 📋 Deployment Lifecycle');
+        lines.push('');
+        lines.push('| State | Timestamp |');
+        lines.push('| ----- | --------- |');
+        for (const entry of result.lifecycle.history) {
+            lines.push(`| \`${entry.state}\` | ${entry.timestamp} |`);
+        }
         lines.push('');
     }
     return lines.join('\n');

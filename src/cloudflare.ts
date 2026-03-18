@@ -3,15 +3,18 @@
 // ─────────────────────────────────────────────────────────
 
 import * as core from '@actions/core';
+import * as github from '@actions/github';
 import { type ExecaReturnValue } from 'execa';
 import {
   type ActionInputs,
   type DeployResult,
+  type ReleaseContext,
   type RollbackResult,
   type PromotionStepResult,
   ActionError,
   ErrorCode,
 } from './types';
+import { timestamp } from './utils';
 
 /**
  * Execute a Wrangler CLI command with proper environment setup.
@@ -86,8 +89,14 @@ export async function ensureWrangler(inputs: ActionInputs): Promise<void> {
 /**
  * Deploy the Worker candidate using `wrangler deploy`.
  * This uploads code and immediately routes traffic to the new version.
+ *
+ * Captures full deployment metadata including release correlation,
+ * git context, and parsed staging/production URLs.
  */
-export async function deployCandidate(inputs: ActionInputs): Promise<DeployResult> {
+export async function deployCandidate(
+  inputs: ActionInputs,
+  releaseContext?: ReleaseContext,
+): Promise<DeployResult> {
   core.info('🚀 Deploying candidate Worker version…');
 
   const args = ['deploy'];
@@ -101,12 +110,19 @@ export async function deployCandidate(inputs: ActionInputs): Promise<DeployResul
   }
 
   const result = await execWrangler(args, inputs);
+  const rawOutput = `${result.stdout}\n${result.stderr}`.trim();
 
   if (result.exitCode !== 0) {
     return {
       success: false,
+      workerName: inputs.workerName,
+      releaseTag: releaseContext?.tagName,
+      sourceTrigger: github.context.eventName,
+      gitSha: github.context.sha,
+      gitRef: github.context.ref,
       stdout: result.stdout,
       stderr: result.stderr,
+      rawOutput,
     };
   }
 
@@ -115,11 +131,20 @@ export async function deployCandidate(inputs: ActionInputs): Promise<DeployResul
 
   return {
     success: true,
+    workerName: inputs.workerName || parsed.workerName,
+    releaseTag: releaseContext?.tagName,
     versionId: parsed.versionId,
     deploymentId: parsed.deploymentId,
-    url: parsed.url,
+    stagingUrl: parsed.stagingUrl,
+    productionUrl: parsed.productionUrl,
+    url: parsed.productionUrl || parsed.stagingUrl,
+    deployedAt: timestamp(),
+    sourceTrigger: github.context.eventName,
+    gitSha: github.context.sha,
+    gitRef: github.context.ref,
     stdout: result.stdout,
     stderr: result.stderr,
+    rawOutput,
   };
 }
 
@@ -329,7 +354,9 @@ export async function rollbackToVersion(
 interface ParsedDeployOutput {
   versionId?: string;
   deploymentId?: string;
-  url?: string;
+  workerName?: string;
+  stagingUrl?: string;
+  productionUrl?: string;
 }
 
 function parseDeployOutput(stdout: string): ParsedDeployOutput {
@@ -344,22 +371,35 @@ function parseDeployOutput(stdout: string): ParsedDeployOutput {
     result.deploymentId = uuidMatch[1];
   }
 
-  // Try to extract the deployment URL
-  const urlMatch = stdout.match(
-    /https:\/\/[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.workers\.dev/,
-  );
-  if (urlMatch?.[0]) {
-    result.url = urlMatch[0];
+  // Try to extract worker name from output
+  const nameMatch = stdout.match(/Uploaded\s+([a-zA-Z0-9_-]+)/i)
+    || stdout.match(/Published\s+([a-zA-Z0-9_-]+)/i);
+  if (nameMatch?.[1]) {
+    result.workerName = nameMatch[1];
   }
 
-  // Fallback URL pattern for custom domains
-  if (!result.url) {
-    const customUrlMatch = stdout.match(
-      /Published\s+.*?\s+to\s+(https?:\/\/\S+)/i,
-    );
-    if (customUrlMatch?.[1]) {
-      result.url = customUrlMatch[1];
-    }
+  // Extract staging URL (workers.dev)
+  const workersDevMatch = stdout.match(
+    /https:\/\/[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.workers\.dev/,
+  );
+  if (workersDevMatch?.[0]) {
+    result.stagingUrl = workersDevMatch[0];
+  }
+
+  // Extract production URL (custom domains / routes)
+  const customUrlMatch = stdout.match(
+    /Published\s+.*?\s+to\s+(https?:\/\/(?!.*workers\.dev)\S+)/i,
+  );
+  if (customUrlMatch?.[1]) {
+    result.productionUrl = customUrlMatch[1];
+  }
+
+  // Also check route patterns
+  const routeMatch = stdout.match(
+    /route:\s*(https?:\/\/(?!.*workers\.dev)\S+)/i,
+  );
+  if (routeMatch?.[1] && !result.productionUrl) {
+    result.productionUrl = routeMatch[1];
   }
 
   return result;

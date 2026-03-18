@@ -81,19 +81,42 @@ export interface ReleaseContext {
     /** Commit SHA the release points to */
     targetCommitish: string;
 }
+/**
+ * Full deployment lifecycle states.
+ * Models the run as a progression rather than scattered booleans.
+ */
+export type DeploymentLifecycle = 'context_resolved' | 'auth_ready' | 'candidate_deploy_started' | 'candidate_deployed' | 'smoke_tests_running' | 'promotion_in_progress' | 'promoted' | 'rollback_in_progress' | 'rolled_back' | 'failed';
 export interface DeployResult {
     /** Whether the deployment succeeded */
     success: boolean;
-    /** Cloudflare version ID */
+    /** Worker name used for deployment */
+    workerName?: string;
+    /** Release tag used as deployment correlation key */
+    releaseTag?: string;
+    /** Cloudflare Worker version ID */
     versionId?: string;
     /** Cloudflare deployment ID */
     deploymentId?: string;
-    /** Deployment URL */
+    /** Staging URL (workers.dev URL) */
+    stagingUrl?: string;
+    /** Production URL (custom domain, if known) */
+    productionUrl?: string;
+    /** Primary deployment URL (best available) */
     url?: string;
-    /** Raw stdout from Wrangler */
+    /** ISO-8601 timestamp when deployment completed */
+    deployedAt?: string;
+    /** What triggered this deployment */
+    sourceTrigger?: string;
+    /** Git commit SHA */
+    gitSha?: string;
+    /** Git ref (branch or tag) */
+    gitRef?: string;
+    /** Raw stdout from Wrangler (preserved for partial parsing) */
     stdout: string;
     /** Raw stderr from Wrangler */
     stderr: string;
+    /** Raw combined output for diagnostics */
+    rawOutput?: string;
 }
 export interface PromotionStepResult {
     /** The rollout percentage for this step */
@@ -134,6 +157,19 @@ export interface SmokeTestResult {
     attempts: number;
 }
 export type PromotionState = 'pending' | 'deploying' | 'smoke-testing' | 'promoting' | 'complete' | 'rolled-back' | 'failed';
+/**
+ * Lightweight run tracker that maps to DeploymentLifecycle.
+ * Logs a structured lifecycle instead of scattered booleans.
+ */
+export interface LifecycleTracker {
+    /** Current lifecycle state */
+    current: DeploymentLifecycle;
+    /** Ordered history of state transitions with timestamps */
+    history: Array<{
+        state: DeploymentLifecycle;
+        timestamp: string;
+    }>;
+}
 export interface PromotionPlan {
     /** Ordered rollout percentage steps */
     steps: number[];
@@ -155,8 +191,10 @@ export interface PromotionResult {
     rollback?: RollbackResult;
     /** Overall error message, if failed */
     error?: string;
-    /** Version ID of the previous stable version */
+    /** Version ID of the previous stable version (captured before deployment) */
     previousStableVersionId?: string;
+    /** Deployment lifecycle tracker */
+    lifecycle?: LifecycleTracker;
     /** Timestamp when promotion started */
     startedAt: string;
     /** Timestamp when promotion completed */
@@ -169,16 +207,30 @@ export interface ReleaseNotesSection {
     versionId?: string;
     /** Deployment URL */
     url?: string;
+    /** Staging URL */
+    stagingUrl?: string;
+    /** Production URL */
+    productionUrl?: string;
     /** Smoke test passed? */
     smokeTestPassed?: boolean;
     /** Promotion result */
     promotionResult: string;
     /** Whether rollback was triggered */
     rollbackTriggered: boolean;
+    /** Rollback version ID */
+    rollbackVersionId?: string;
+    /** Release tag */
+    releaseTag?: string;
+    /** Git SHA */
+    gitSha?: string;
+    /** Source trigger (event name) */
+    sourceTrigger?: string;
     /** Timestamp */
     timestamp: string;
     /** Environment */
     environment: string;
     /** Rollout steps summary */
     rolloutSteps?: string;
+    /** Previous stable version (for rollback reference) */
+    previousStableVersionId?: string;
 }

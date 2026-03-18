@@ -27,6 +27,8 @@ export function buildReleaseNotesSection(
     deploymentId: result.deploy?.deploymentId,
     versionId: result.deploy?.versionId,
     url: result.deploy?.url,
+    stagingUrl: result.deploy?.stagingUrl,
+    productionUrl: result.deploy?.productionUrl,
     smokeTestPassed,
     promotionResult: result.state === 'complete'
       ? 'success'
@@ -34,9 +36,14 @@ export function buildReleaseNotesSection(
         ? 'rolled-back'
         : 'failed',
     rollbackTriggered: result.state === 'rolled-back',
+    rollbackVersionId: result.rollback?.rolledBackToVersionId,
+    releaseTag: result.deploy?.releaseTag,
+    gitSha: result.deploy?.gitSha,
+    sourceTrigger: result.deploy?.sourceTrigger,
     timestamp: result.completedAt || timestamp(),
     environment,
     rolloutSteps: rolloutSteps ? rolloutSteps.map((s) => `${s}%`).join(' → ') : undefined,
+    previousStableVersionId: result.previousStableVersionId,
   };
 }
 
@@ -85,8 +92,22 @@ export function buildJobSummary(
   if (result.deploy?.deploymentId) {
     lines.push(`| **Deployment ID** | \`${result.deploy.deploymentId}\` |`);
   }
-  if (result.deploy?.url) {
+  if (result.deploy?.stagingUrl) {
+    lines.push(`| **Staging URL** | ${result.deploy.stagingUrl} |`);
+  }
+  if (result.deploy?.productionUrl) {
+    lines.push(`| **Production URL** | ${result.deploy.productionUrl} |`);
+  } else if (result.deploy?.url) {
     lines.push(`| **URL** | ${result.deploy.url} |`);
+  }
+  if (result.deploy?.gitSha) {
+    lines.push(`| **Git SHA** | \`${result.deploy.gitSha.substring(0, 12)}\` |`);
+  }
+  if (result.deploy?.sourceTrigger) {
+    lines.push(`| **Trigger** | \`${result.deploy.sourceTrigger}\` |`);
+  }
+  if (result.previousStableVersionId) {
+    lines.push(`| **Previous Stable** | \`${result.previousStableVersionId}\` |`);
   }
   lines.push(`| **Started** | ${result.startedAt} |`);
   if (result.completedAt) {
@@ -130,6 +151,18 @@ export function buildJobSummary(
     lines.push('### ❌ Error');
     lines.push('');
     lines.push(`\`\`\`\n${result.error}\n\`\`\``);
+    lines.push('');
+  }
+
+  // Lifecycle history
+  if (result.lifecycle && result.lifecycle.history.length > 0) {
+    lines.push('### 📋 Deployment Lifecycle');
+    lines.push('');
+    lines.push('| State | Timestamp |');
+    lines.push('| ----- | --------- |');
+    for (const entry of result.lifecycle.history) {
+      lines.push(`| \`${entry.state}\` | ${entry.timestamp} |`);
+    }
     lines.push('');
   }
 
