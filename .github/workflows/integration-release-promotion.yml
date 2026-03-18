@@ -131,7 +131,7 @@ jobs:
           gradual-steps: ${{ vars.CF_GRADUAL_STEPS || '10,50,100' }}
           gradual-step-wait-seconds: ${{ vars.CF_GRADUAL_STEP_WAIT_SECONDS || '30' }}
           post-step-smoke-tests: 'true'
-          smoke-test-url: ${{ vars.CF_PRODUCTION_SMOKE_URL || 'https://example.com' }}
+          smoke-test-url: ${{ vars.CF_PRODUCTION_SMOKE_URL }}
           smoke-test-expected-status: ${{ vars.CF_SMOKE_EXPECTED_STATUS || '200' }}
           smoke-test-expected-body-contains: ${{ vars.CF_SMOKE_EXPECTED_BODY || 'Example Domain' }}
           smoke-test-command: "node -e \"console.log('smoke command ok')\""
