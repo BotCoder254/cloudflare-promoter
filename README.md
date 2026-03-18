@@ -1,6 +1,6 @@
 # Workers Release Promoter
 
-A marketplace-quality GitHub Action that turns a **GitHub Release** into a controlled **Cloudflare Workers** production promotion flow -- with promotion strategies, two-phase smoke-test gating, automatic rollback, and release-page deployment annotations.
+A  GitHub Action that turns a **GitHub Release** into a controlled **Cloudflare Workers** production promotion flow -- with promotion strategies, two-phase smoke-test gating, automatic rollback, and release-page deployment annotations.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=fff)](#)
 [![Node.js 20](https://img.shields.io/badge/Node.js-20-339933?logo=node.js&logoColor=fff)](#)
